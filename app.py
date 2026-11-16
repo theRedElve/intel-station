@@ -37,6 +37,11 @@ def _to_int(value, default=0):
         return default
 
 
+def _tier(value, default="media"):
+    value = (value or "").strip()
+    return value if value in db.TIERS else default
+
+
 class Api:
     """所有接口实现，返回 (payload, status)。"""
 
@@ -63,8 +68,11 @@ class Api:
         if not item:
             return {"error": "情报不存在"}, 404
         with db.get_db() as conn:
-            row = conn.execute("SELECT title, url FROM feeds WHERE id = ?", (item["feed_id"],)).fetchone()
+            row = conn.execute(
+                "SELECT title, url, tier FROM feeds WHERE id = ?", (item["feed_id"],)
+            ).fetchone()
         item["source"] = row["title"] if row else ""
+        item["source_tier"] = (row["tier"] if row else "") or "media"
         return item, 200
 
     def item_update(self, q, body, item_id):
@@ -96,6 +104,7 @@ class Api:
         if not url.startswith(("http://", "https://")):
             return {"error": "请填写完整的 http(s) 订阅地址"}, 400
         category = (body.get("category") or "未分类").strip()
+        tier = _tier(body.get("tier"))
         try:
             meta, items = feeds.fetch_feed(url)
         except Exception as e:  # noqa: BLE001
@@ -106,8 +115,8 @@ class Api:
             if exists:
                 return {"error": "该订阅已存在"}, 400
             cur = conn.execute(
-                "INSERT INTO feeds (url, title, site_url, category, created_at) VALUES (?,?,?,?,?)",
-                (url, title, meta.get("site_url", ""), category, int(time.time())),
+                "INSERT INTO feeds (url, title, site_url, category, tier, created_at) VALUES (?,?,?,?,?,?)",
+                (url, title, meta.get("site_url", ""), category, tier, int(time.time())),
             )
             feed_id = cur.lastrowid
         db.add_event(f"新增信息源 {title}（{url}）")
@@ -115,10 +124,15 @@ class Api:
 
     def feed_update(self, q, body, feed_id):
         fields, params = [], []
-        for key in ("title", "category", "enabled"):
+        for key in ("title", "category", "enabled", "tier"):
             if key in body:
                 fields.append(f"{key} = ?")
-                params.append(body[key] if key != "enabled" else (1 if body[key] else 0))
+                if key == "enabled":
+                    params.append(1 if body[key] else 0)
+                elif key == "tier":
+                    params.append(_tier(body[key]))
+                else:
+                    params.append(body[key])
         if not fields:
             return {"error": "没有可更新字段"}, 400
         params.append(feed_id)
@@ -307,6 +321,83 @@ class Api:
             return {"error": str(e)}, 400
         return {"ok": True}, 200
 
+    def resources(self, q, body):
+        with db.get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM resources ORDER BY category, CASE tier "
+                "WHEN 'official' THEN 0 WHEN 'industry' THEN 1 ELSE 2 END, id"
+            ).fetchall()
+        return [dict(r) for r in rows], 200
+
+    def resource_add(self, q, body):
+        name = (body.get("name") or "").strip()
+        url = (body.get("url") or "").strip()
+        if not name:
+            return {"error": "请填写站点名称"}, 400
+        if url and not url.startswith(("http://", "https://")):
+            return {"error": "请填写完整的 http(s) 地址"}, 400
+        category = (body.get("category") or "未分类").strip()
+        tier = _tier(body.get("tier"), "official")
+        note = (body.get("note") or "").strip()
+        with db.get_db() as conn:
+            conn.execute(
+                "INSERT INTO resources (name, url, category, tier, note, created_at) VALUES (?,?,?,?,?,?)",
+                (name, url, category, tier, note, int(time.time())),
+            )
+        db.add_event(f"新增权威源 {name}")
+        return {"ok": True}, 200
+
+    def resource_update(self, q, body, rid):
+        fields, params = [], []
+        for key in ("name", "url", "category", "tier", "note"):
+            if key in body:
+                value = (body[key] or "").strip()
+                if key == "tier":
+                    value = _tier(value, "official")
+                fields.append(f"{key} = ?")
+                params.append(value)
+        if not fields:
+            return {"error": "没有可更新字段"}, 400
+        params.append(rid)
+        with db.get_db() as conn:
+            conn.execute(f"UPDATE resources SET {', '.join(fields)} WHERE id = ?", params)
+        return {"ok": True}, 200
+
+    def resource_delete(self, q, body, rid):
+        with db.get_db() as conn:
+            row = conn.execute("SELECT name FROM resources WHERE id = ?", (rid,)).fetchone()
+            conn.execute("DELETE FROM resources WHERE id = ?", (rid,))
+        if row:
+            db.add_event(f"删除权威源 {row['name']}")
+        return {"ok": True}, 200
+
+    def resource_subscribe(self, q, body, rid):
+        """尝试把资源站点本身当作 RSS / JSON 订阅源接入。"""
+        with db.get_db() as conn:
+            row = conn.execute("SELECT * FROM resources WHERE id = ?", (rid,)).fetchone()
+        if not row:
+            return {"error": "资源不存在"}, 404
+        url = (row["url"] or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return {"error": "该资源没有可用的网址"}, 400
+        try:
+            meta, items = feeds.fetch_feed(url)
+        except Exception:  # noqa: BLE001
+            return {"error": "该站点未提供可识别的 RSS/JSON 订阅，请在「信息源」中手动填写订阅地址"}, 400
+        title = row["name"] or meta.get("title") or url
+        with db.get_db() as conn:
+            exists = conn.execute("SELECT id FROM feeds WHERE url = ?", (url,)).fetchone()
+            if exists:
+                return {"error": "该订阅已存在"}, 400
+            cur = conn.execute(
+                "INSERT INTO feeds (url, title, site_url, category, tier, created_at) VALUES (?,?,?,?,?,?)",
+                (url, title, meta.get("site_url", ""), row["category"], _tier(row["tier"], "official"),
+                 int(time.time())),
+            )
+            feed_id = cur.lastrowid
+        db.add_event(f"从资源库新增信息源 {title}（{url}）")
+        return {"ok": True, "id": feed_id, "title": title, "sample": len(items)}, 200
+
     def events(self, q, body):
         return db.list_events(_to_int((q.get("limit") or [40])[0], 40)), 200
 
@@ -338,6 +429,11 @@ ROUTES = [
     ("POST", r"^/api/settings/test-ai$", Api.test_ai, False),
     ("POST", r"^/api/settings/test-push$", Api.test_push, False),
     ("GET", r"^/api/events$", Api.events, False),
+    ("GET", r"^/api/resources$", Api.resources, False),
+    ("POST", r"^/api/resources$", Api.resource_add, False),
+    ("PATCH", r"^/api/resources/(\d+)$", Api.resource_update, True),
+    ("DELETE", r"^/api/resources/(\d+)$", Api.resource_delete, True),
+    ("POST", r"^/api/resources/(\d+)/subscribe$", Api.resource_subscribe, True),
 ]
 
 

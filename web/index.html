@@ -30,6 +30,9 @@
       <button class="nav-item" data-view="sources">
         <span class="nav-ico">◈</span><span>信息源</span>
       </button>
+      <button class="nav-item" data-view="resources">
+        <span class="nav-ico">▦</span><span>资源库</span>
+      </button>
       <button class="nav-item" data-view="topics">
         <span class="nav-ico">◎</span><span>关注主题</span>
       </button>
@@ -139,6 +142,11 @@
           <input class="input" name="url" placeholder="https://example.com/feed" required>
           <input class="input narrow" name="title" placeholder="名称（可留空自动识别）">
           <input class="input narrow" name="category" placeholder="分类，如 AI">
+          <select class="select" name="tier" title="信源等级">
+            <option value="media">媒体</option>
+            <option value="industry">行业</option>
+            <option value="official">官方</option>
+          </select>
           <button class="btn primary" type="submit">添加</button>
         </form>
       </div>
@@ -146,6 +154,43 @@
         <div class="panel-head"><h3>订阅列表</h3><span class="panel-hint" id="feedSummary"></span></div>
         <div class="table-wrap"><table class="table" id="feedTable"></table></div>
       </div>
+    </section>
+
+    <!-- 资源库 -->
+    <section class="view" id="view-resources">
+      <div class="panel">
+        <div class="panel-head"><h3>添加权威站点</h3><span class="panel-hint">官方 > 行业 > 媒体</span></div>
+        <form class="inline-form" id="resourceForm">
+          <input class="input" name="name" placeholder="站点名称" required>
+          <input class="input" name="url" placeholder="https://example.com" required>
+          <select class="select" name="category">
+            <option>政策与监管</option>
+            <option>数据与统计</option>
+            <option>行业研究</option>
+            <option>平台规则</option>
+            <option>学术与论文</option>
+            <option>资本与财报</option>
+            <option>其他</option>
+          </select>
+          <select class="select" name="tier">
+            <option value="official">官方</option>
+            <option value="industry">行业</option>
+            <option value="media">媒体</option>
+          </select>
+          <input class="input narrow" name="note" placeholder="备注（可选）">
+          <button class="btn primary" type="submit">添加</button>
+        </form>
+        <p class="note">看到一个数据或结论时，先回到这里的原始来源核对，再决定是否采信。标注「待核验」的链接请人工确认。</p>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>信源分级规则</h3><span class="panel-hint">影响加工时的重要度</span></div>
+        <div class="tier-legend">
+          <span class="tier-badge official">官方</span> 政府、监管、交易所、平台规则官方发布，加工时 +8 分
+          <span class="tier-badge industry">行业</span> 行业研究、咨询、学术、企业官方，加工时 +4 分
+          <span class="tier-badge media">媒体</span> 媒体资讯与自媒体，不加分
+        </div>
+      </div>
+      <div id="resourceGroups"></div>
     </section>
 
     <!-- 主题 -->

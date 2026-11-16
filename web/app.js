@@ -25,9 +25,17 @@ const VIEW_TITLES = {
   feed: ["情报流", "采集 · 加工 · 分级后的信息流"],
   digest: ["每日简报", "把一天的信息压缩成一页结论"],
   sources: ["信息源", "管理 RSS 订阅与采集状态"],
+  resources: ["资源库", "权威信息源导航与信源分级"],
   topics: ["关注主题", "用关键词定义你的情报雷达"],
   settings: ["设置与推送", "模型、调度与通知渠道"],
 };
+
+const TIER_LABELS = { official: "官方", industry: "行业", media: "媒体" };
+
+function tierBadge(tier) {
+  const t = tier && TIER_LABELS[tier] ? tier : "media";
+  return `<span class="tier-badge ${t}">${TIER_LABELS[t]}</span>`;
+}
 
 /* ---------------- 基础工具 ---------------- */
 
@@ -102,6 +110,7 @@ function switchView(view) {
   if (view === "feed") loadFeed(true);
   if (view === "digest") loadDigest();
   if (view === "sources") loadSources();
+  if (view === "resources") loadResources();
   if (view === "topics") loadTopics();
   if (view === "settings") loadSettings();
 }
@@ -197,9 +206,11 @@ function itemCard(it) {
       ${it.summary ? `<p class="card-summary">${esc(it.summary)}</p>` : ""}
       <div class="card-foot">
         <span class="src">${esc(it.source || "未知来源")}</span>
+        ${tierBadge(it.source_tier)}
         <i class="dot-sep"></i>
         <span>${relTime(it.published_at)}</span>
         ${it.topic ? `<span class="mini-tag">${esc(it.topic)}</span>` : ""}
+        ${it.verify_hint ? `<span class="verify-badge" title="命中「${esc(it.verify_hint)}」，建议回源核对">建议回源核对</span>` : ""}
         <div class="card-tags">${tags}</div>
         <div class="card-actions">
           <button class="icon-btn ${it.starred ? "on" : ""}" data-act="star" data-id="${it.id}" title="收藏">★</button>
@@ -278,12 +289,14 @@ async function openItem(id) {
     <div class="modal-meta">
       <span class="score ${cls}">${it.importance} · ${scoreLabel(it.importance)}</span>
       <span>${esc(it.source || "未知来源")}</span>
+      ${tierBadge(it.source_tier)}
       <i class="dot-sep"></i>
       <span>${it.published_at ? new Date(it.published_at * 1000).toLocaleString("zh-CN", { hour12: false }) : ""}</span>
       ${it.topic ? `<span class="mini-tag">${esc(it.topic)}</span>` : ""}
     </div>
     <h2>${esc(it.title)}</h2>
     ${it.summary ? `<div class="modal-summary">${esc(it.summary)}</div>` : ""}
+    ${it.verify_hint ? `<div class="verify-note">文中出现「${esc(it.verify_hint)}」类引用，建议回源核对后再采信或转发。</div>` : ""}
     ${points}
     ${it.reason ? `<h4>打分理由</h4><p class="hint">${esc(it.reason)}</p>` : ""}
     ${entities}
@@ -385,7 +398,7 @@ async function loadSources() {
 
   $("#feedTable").innerHTML = `
     <thead><tr>
-      <th>名称 / 地址</th><th>分类</th><th>最近采集</th><th>状态</th><th>情报数</th><th></th>
+      <th>名称 / 地址</th><th>分类</th><th>等级</th><th>最近采集</th><th>状态</th><th>情报数</th><th></th>
     </tr></thead>
     <tbody>${feeds.map(f => `
       <tr>
@@ -394,6 +407,12 @@ async function loadSources() {
           <div class="feed-url">${esc(f.url)}</div>
         </td>
         <td>${esc(f.category || "未分类")}</td>
+        <td>
+          <select class="select tier-select" data-feed-tier="${f.id}" title="信源等级">
+            ${["official", "industry", "media"].map(t =>
+              `<option value="${t}" ${(f.tier || "media") === t ? "selected" : ""}>${TIER_LABELS[t]}</option>`).join("")}
+          </select>
+        </td>
         <td>${f.last_fetch_at ? relTime(f.last_fetch_at) : "—"}</td>
         <td><span class="status-pill ${statusCls(f)}">${esc(f.last_status || (f.enabled ? "等待采集" : "已停用"))}</span></td>
         <td>${f.item_count || 0}</td>
@@ -415,6 +434,40 @@ function statusCls(f) {
   if ((f.last_status || "").startsWith("失败")) return "err";
   if (f.last_status) return "ok";
   return "idle";
+}
+
+/* ---------------- 资源库 ---------------- */
+
+async function loadResources() {
+  let list;
+  try { list = await api("/api/resources"); } catch (e) { return toast(e.message, "err"); }
+  const order = [];
+  const groups = {};
+  list.forEach(r => {
+    const cat = r.category || "未分类";
+    if (!groups[cat]) { groups[cat] = []; order.push(cat); }
+    groups[cat].push(r);
+  });
+  $("#resourceGroups").innerHTML = order.length ? order.map(cat => `
+    <div class="panel">
+      <div class="panel-head"><h3>${esc(cat)}</h3><span class="panel-hint">${groups[cat].length} 个站点</span></div>
+      <div class="resource-grid">
+        ${groups[cat].map(r => `
+          <div class="resource-card">
+            <div class="resource-top">
+              <span class="resource-name">${esc(r.name)}</span>
+              ${tierBadge(r.tier)}
+            </div>
+            ${r.note ? `<div class="resource-note">${esc(r.note)}</div>` : ""}
+            <div class="resource-url">${esc(r.url || "")}</div>
+            <div class="resource-actions">
+              ${safeUrl(r.url) ? `<a class="mini-btn" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener">打开站点</a>` : ""}
+              <button class="mini-btn" data-res-sub="${r.id}">尝试订阅</button>
+              <button class="mini-btn danger" data-res-del="${r.id}" data-name="${esc(r.name)}">删除</button>
+            </div>
+          </div>`).join("")}
+      </div>
+    </div>`).join("") : `<div class="panel"><div class="empty">资源库为空，先添加一个权威站点。</div></div>`;
 }
 
 /* ---------------- 主题 ---------------- */
@@ -707,6 +760,23 @@ function bind() {
     const topicEdit = e.target.closest("[data-topic-edit]");
     if (topicEdit) return editTopic(Number(topicEdit.dataset.topicEdit));
 
+    const resSub = e.target.closest("[data-res-sub]");
+    if (resSub) {
+      api("/api/resources/" + resSub.dataset.resSub + "/subscribe", { method: "POST" })
+        .then(r => { toast(`已接入「${r.title}」，发现 ${r.sample} 条内容`, "ok"); pollStatus(true); })
+        .catch(err => toast(err.message, "err"));
+      return;
+    }
+
+    const resDel = e.target.closest("[data-res-del]");
+    if (resDel) {
+      if (!confirm(`从资源库删除「${resDel.dataset.name}」？`)) return;
+      api("/api/resources/" + resDel.dataset.resDel, { method: "DELETE" })
+        .then(() => { toast("已删除", "ok"); loadResources(); })
+        .catch(err => toast(err.message, "err"));
+      return;
+    }
+
     const topicDel = e.target.closest("[data-topic-del]");
     if (topicDel) {
       if (!confirm("删除该关注主题？")) return;
@@ -714,6 +784,16 @@ function bind() {
         .then(() => { toast("已删除", "ok"); loadTopics(); })
         .catch(err => toast(err.message, "err"));
     }
+  });
+
+  document.addEventListener("change", (e) => {
+    const sel = e.target.closest("[data-feed-tier]");
+    if (!sel) return;
+    const id = sel.dataset.feedTier;
+    const tier = sel.value;
+    api("/api/feeds/" + id, { method: "PATCH", body: { tier } })
+      .then(() => toast(`等级已改为「${TIER_LABELS[tier]}」，仅影响之后加工的情报`, "ok"))
+      .catch(err => toast(err.message, "err"));
   });
 
   $("#btnFetch").addEventListener("click", runFetch);
@@ -759,6 +839,7 @@ function bind() {
           url: fields.url.value.trim(),
           title: fields.title.value.trim(),
           category: fields.category.value.trim(),
+          tier: fields.tier.value,
         },
       });
       toast(`已添加「${res.title}」，发现 ${res.sample} 条内容`, "ok");
@@ -768,6 +849,30 @@ function bind() {
       pollStatus(true);
     } catch (err) { toast(err.message, "err"); }
     finally { btn.disabled = false; btn.textContent = "添加"; }
+  });
+
+  $("#resourceForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fields = form.elements;
+    const btn = $("button", form);
+    btn.disabled = true;
+    try {
+      await api("/api/resources", {
+        method: "POST",
+        body: {
+          name: fields.name.value.trim(),
+          url: fields.url.value.trim(),
+          category: fields.category.value,
+          tier: fields.tier.value,
+          note: fields.note.value.trim(),
+        },
+      });
+      toast("已加入资源库", "ok");
+      form.reset();
+      loadResources();
+    } catch (err) { toast(err.message, "err"); }
+    finally { btn.disabled = false; }
   });
 
   $("#topicForm").addEventListener("submit", async (e) => {

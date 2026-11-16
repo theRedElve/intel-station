@@ -26,11 +26,38 @@ SCHEMA_HINT = """请对每条情报输出一个对象，字段如下：
 - 85-100：行业重大事件、政策变化、关键技术突破、与关注主题强相关且有独到信息；
 - 70-84：与关注主题相关的重要进展、有价值的深度分析；
 - 45-69：一般行业资讯、常规产品更新；
-- 0-44：营销软文、重复报道、价值较低的内容。"""
+- 0-44：营销软文、重复报道、价值较低的内容。
+信源等级：official 为政府/监管/平台官方，industry 为行业研究/学术/企业官方，media 为媒体资讯。
+同等信息量下，官方与行业源更可信、信息更原始，应给予更高重要度。"""
 
 
 class AIError(Exception):
     pass
+
+
+TIER_BONUS = {"official": 8, "industry": 4, "media": 0}
+TIER_LABELS = {"official": "官方", "industry": "行业", "media": "媒体"}
+
+
+def tier_bonus(tier):
+    return TIER_BONUS.get(tier or "media", 0)
+
+
+VERIFY_PATTERNS = [
+    (r"数据显示|数据表明|数据指出|数据统计", "数据显示"),
+    (r"报告指出|报告显示|报告称|白皮书|蓝皮书", "报告指出"),
+    (r"研究显示|研究表明|研究发现|调查显示|调研显示|统计显示|抽样调查", "研究显示"),
+    (r"据统计|据测算|据估算|第三方数据|机构测算", "据统计"),
+]
+
+
+def detect_verify_hint(*texts):
+    """识别引用数据/研究结论的表述，返回命中类型；无命中返回空字符串。"""
+    text = " ".join(t or "" for t in texts)[:4000]
+    for pattern, label in VERIFY_PATTERNS:
+        if re.search(pattern, text):
+            return label
+    return ""
 
 
 def is_ready(cfg):
@@ -95,6 +122,7 @@ def analyze_batch(items, topics, cfg):
             "id": idx,
             "title": it["title"],
             "source": it.get("source", ""),
+            "source_tier": it.get("source_tier") or "media",
             "published": time.strftime("%Y-%m-%d %H:%M", time.localtime(it.get("published_at") or time.time())),
             "content": _clip(it.get("content", ""), 1800),
         })

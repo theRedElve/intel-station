@@ -140,9 +140,12 @@ def process_pending(cfg, limit=None, progress=None):
         except Exception:
             row["tags"] = []
     with db.get_db() as conn:
-        feed_map = {r["id"]: r["title"] for r in conn.execute("SELECT id, title FROM feeds").fetchall()}
+        feed_rows = conn.execute("SELECT id, title, tier FROM feeds").fetchall()
+    feed_map = {r["id"]: r["title"] for r in feed_rows}
+    tier_map = {r["id"]: (r["tier"] or "media") for r in feed_rows}
     for row in pending:
         row["source"] = feed_map.get(row["feed_id"], "")
+        row["source_tier"] = tier_map.get(row["feed_id"], "media")
 
     use_ai = ai.is_ready(cfg)
     batch_size = max(1, int(cfg.get("ai", {}).get("batch_size") or 6))
@@ -167,13 +170,20 @@ def process_pending(cfg, limit=None, progress=None):
         with db.get_db() as conn:
             for idx, item in enumerate(batch, 1):
                 res = results.get(idx) or ai.rule_based_analysis(item, topics)
+                tier = item.get("source_tier") or "media"
+                bonus = ai.tier_bonus(tier)
+                importance = max(0, min(100, int(res["importance"]) + bonus))
+                reason = res["reason"]
+                if bonus:
+                    reason = f"{reason} · {ai.TIER_LABELS.get(tier, '媒体')}源 +{bonus}"
+                verify_hint = ai.detect_verify_hint(item.get("title"), item.get("content"), res.get("summary"))
                 conn.execute(
                     """UPDATE items SET summary = ?, key_points = ?, tags = ?, entities = ?,
-                       importance = ?, reason = ?, topic = ?, processed = 1 WHERE id = ?""",
+                       importance = ?, reason = ?, topic = ?, verify_hint = ?, processed = 1 WHERE id = ?""",
                     (res["summary"], json.dumps(res["key_points"], ensure_ascii=False),
                      json.dumps(res["tags"], ensure_ascii=False),
                      json.dumps(res["entities"], ensure_ascii=False),
-                     int(res["importance"]), res["reason"], res["topic"], item["id"]),
+                     importance, reason[:80], res["topic"], verify_hint, item["id"]),
                 )
                 processed += 1
         time.sleep(0.1)
@@ -274,11 +284,14 @@ def generate_digest(cfg, day=None, use_ai=True):
             "ORDER BY importance DESC, published_at DESC LIMIT 160",
             (start, end),
         ).fetchall()
-        feed_map = {r["id"]: r["title"] for r in conn.execute("SELECT id, title FROM feeds").fetchall()}
+        feed_rows = conn.execute("SELECT id, title, tier FROM feeds").fetchall()
+    feed_map = {r["id"]: r["title"] for r in feed_rows}
+    tier_map = {r["id"]: (r["tier"] or "media") for r in feed_rows}
     items = []
     for r in rows:
         d = db.row_to_item(r)
         d["source"] = feed_map.get(d["feed_id"], "")
+        d["source_tier"] = tier_map.get(d["feed_id"], "media")
         items.append(d)
 
     if not items:
@@ -287,11 +300,13 @@ def generate_digest(cfg, day=None, use_ai=True):
         return {"day": day, "content": content, "item_count": 0}
 
     top = [i for i in items if i["importance"] >= HIGH_VALUE]
+    verify_items = [i for i in items if i.get("verify_hint")]
     overview = ai.write_digest_overview(day, items, cfg) if (use_ai and ai.is_ready(cfg)) else ""
 
     lines = [f"# 每日情报简报 · {day}", ""]
     lines.append(f"> 今日收录 **{len(items)}** 条，其中高价值 **{len(top)}** 条，"
-                 f"覆盖 **{len({i['source'] for i in items})}** 个信息源。")
+                 f"覆盖 **{len({i['source'] for i in items})}** 个信息源，"
+                 f"**{len(verify_items)}** 条引用数据或研究结论待回源核对。")
     lines.append("")
 
     if overview:
@@ -308,15 +323,24 @@ def generate_digest(cfg, day=None, use_ai=True):
                 for p in it["key_points"]:
                     lines.append(f"- {p}")
             meta = " · ".join(x for x in [
-                it.get("source", ""),
+                f"{it.get('source', '')}［{ai.TIER_LABELS.get(it.get('source_tier') or 'media', '媒体')}］" if it.get("source") else "",
                 time.strftime("%m-%d %H:%M", time.localtime(it.get("published_at") or time.time())),
                 "、".join(it.get("tags", [])),
             ] if x)
+            if it.get("verify_hint"):
+                lines.append(f"> 建议回源核对（{it['verify_hint']}）")
             if it.get("url"):
                 lines.append(f"\n[{meta}]({it['url']})")
             else:
                 lines.append(f"\n{meta}")
             lines.append("")
+
+    if verify_items:
+        lines += ["## 待回源核对", ""]
+        for it in verify_items[:12]:
+            lines.append(f"- **[{it['importance']}] {it['title']}** · {it.get('source', '')}"
+                         f" · 命中「{it['verify_hint']}」")
+        lines.append("")
 
     grouped = {}
     for it in items:
