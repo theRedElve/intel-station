@@ -60,6 +60,10 @@ class Api:
     def knowledge(self, q, body):
         return db.stats_knowledge(), 200
 
+    def knowledge_summary(self, q, body):
+        months = _to_int((q.get("months") or ["3"])[0], 3)
+        return pipeline.knowledge_summary(months, config.load_config()), 200
+
     def intake(self, q, body):
         limit = min(100, _to_int((q.get("limit") or [20])[0], 20))
         return db.list_intake(limit), 200
@@ -494,6 +498,7 @@ class Api:
 ROUTES = [
     ("GET", r"^/api/overview$", Api.overview, False),
     ("GET", r"^/api/knowledge$", Api.knowledge, False),
+    ("GET", r"^/api/knowledge/summary$", Api.knowledge_summary, False),
     ("GET", r"^/api/intake$", Api.intake, False),
     ("POST", r"^/api/intake$", Api.intake_add, False),
     ("GET", r"^/api/items$", Api.items, False),

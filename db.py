@@ -457,6 +457,65 @@ def stats_knowledge():
     }
 
 
+def knowledge_period(months=3):
+    """指定时间窗内的已读情报聚合，供知识总结使用（按发布时间，缺失时用入库时间）。"""
+    start = int(time.time()) - int(months * 30 * 86400)
+    time_col = "COALESCE(NULLIF(published_at, 0), fetched_at)"
+    time_col_i = "COALESCE(NULLIF(i.published_at, 0), i.fetched_at)"
+    with get_db() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) c FROM items WHERE read = 1 AND {time_col} >= ?", (start,)
+        ).fetchone()["c"]
+        high = conn.execute(
+            f"SELECT COUNT(*) c FROM items WHERE read = 1 AND {time_col} >= ? AND importance >= 70",
+            (start,),
+        ).fetchone()["c"]
+        ratings = {"low": 0, "mid": 0, "high": 0}
+        for r in conn.execute(
+            f"SELECT rating, COUNT(*) c FROM items WHERE read = 1 AND {time_col} >= ? "
+            "AND rating != '' GROUP BY rating",
+            (start,),
+        ).fetchall():
+            if r["rating"] in ratings:
+                ratings[r["rating"]] = r["c"]
+        topics = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT topic, COUNT(*) c FROM items WHERE read = 1 AND {time_col} >= ? "
+                "AND topic != '' GROUP BY topic ORDER BY c DESC LIMIT 5",
+                (start,),
+            ).fetchall()
+        ]
+        tiers = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT COALESCE(f.tier, 'media') tier, COUNT(*) c "
+                "FROM items i LEFT JOIN feeds f ON f.id = i.feed_id "
+                f"WHERE i.read = 1 AND {time_col_i} >= ? GROUP BY tier",
+                (start,),
+            ).fetchall()
+        ]
+        samples = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT id, title, topic, rating, importance, summary, {time_col} ts FROM items "
+                f"WHERE read = 1 AND topic != '' AND {time_col} >= ? "
+                f"ORDER BY importance DESC, {time_col} DESC LIMIT 8",
+                (start,),
+            ).fetchall()
+        ]
+    return {
+        "months": months,
+        "start": start,
+        "total": total,
+        "high": high,
+        "ratings": ratings,
+        "topics": topics,
+        "tiers": tiers,
+        "samples": samples,
+    }
+
+
 def add_intake(data):
     """人工投递：写入一条非 RSS 情报，返回新建或命中去重的记录 id。"""
     now = int(time.time())

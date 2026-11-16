@@ -224,6 +224,61 @@ def run_pipeline(cfg, feed_id=None, do_process=True):
         LOCK.release()
 
 
+def knowledge_summary(months, cfg):
+    """知识库时间窗总结：优先模型，失败或无 Key 时用规则拼接。"""
+    months = 1 if int(months) == 1 else 3
+    period = db.knowledge_period(months)
+    text, source = "", "rule"
+    if period["total"] and ai.is_ready(cfg):
+        try:
+            text = ai.period_summary(period, cfg)
+            source = "ai"
+        except Exception as e:  # noqa: BLE001
+            db.add_event(f"知识总结生成失败，改用规则摘要：{str(e)[:120]}", level="warn")
+    if not text:
+        text = _rule_period_summary(period)
+    return {
+        "months": months,
+        "total": period["total"],
+        "high": period["high"],
+        "ratings": period["ratings"],
+        "topics": period["topics"],
+        "tiers": period["tiers"],
+        "text": text,
+        "source": source,
+    }
+
+
+def _rule_period_summary(period):
+    label = "近三个月" if period["months"] >= 3 else "近一个月"
+    if not period["total"]:
+        return f"{label}还没有已读沉淀，标记已读的情报会进入这里。"
+    parts = [f"{label}共沉淀 {period['total']} 条已读情报"]
+    if period["topics"]:
+        top = "、".join(f"{t['topic']}（{t['c']} 条）" for t in period["topics"][:3])
+        parts.append(f"主题集中在 {top}")
+    r = period["ratings"]
+    rated = r["low"] + r["mid"] + r["high"]
+    if rated:
+        parts.append(f"人工评判 {rated} 条（高 {r['high']} / 中 {r['mid']} / 低 {r['low']}）")
+    if period["high"]:
+        parts.append(f"高价值 {period['high']} 条")
+    text = "；".join(parts) + "。"
+    picked, seen = [], set()
+    for it in period["samples"]:
+        topic = it.get("topic") or ""
+        if topic and topic in seen:
+            continue
+        seen.add(topic)
+        picked.append(it)
+        if len(picked) == 3:
+            break
+    if picked:
+        titles = "、".join(f"《{it['title'][:22]}》" for it in picked)
+        text += f"值得回看：{titles}。"
+    return text
+
+
 def get_topics():
     with db.get_db() as conn:
         rows = conn.execute("SELECT * FROM topics WHERE enabled = 1 ORDER BY weight DESC").fetchall()

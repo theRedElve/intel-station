@@ -260,6 +260,30 @@ def rule_based_analysis(item, topics):
     }
 
 
+def period_summary(period, cfg):
+    """把一段时间内的已读情报写成一段中文总结。"""
+    label = "近三个月" if period["months"] >= 3 else "近一个月"
+    topic_line = "、".join(f"{t['topic']}（{t['c']} 条）" for t in period["topics"]) or "无"
+    item_lines = "\n".join(
+        f"- [{it.get('topic') or '未分类'}] {it['title']}：{_clip(it.get('summary') or '', 90)}"
+        for it in period["samples"]
+    ) or "- 无"
+    user_prompt = (
+        f"时间范围：{label}；已读 {period['total']} 条；高价值 {period['high']} 条；"
+        f"主题分布：{topic_line}。\n"
+        f"代表情报：\n{item_lines}\n\n"
+        "请用 120-180 字中文总结这段时间的知识重点、关注方向的变化和值得回看的内容，"
+        "语气克制，不要逐条罗列，不要编造数据，只输出总结正文。"
+    )
+    content = _post(cfg, {
+        "model": cfg["ai"]["model"],
+        "messages": [{"role": "user", "content": user_prompt}],
+        "temperature": 0.3,
+        "max_tokens": 600,
+    })
+    return _clip(content, 400)
+
+
 def test_connection(cfg):
     content = _post(cfg, {
         "model": cfg["ai"]["model"],

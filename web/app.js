@@ -214,29 +214,8 @@ async function loadKnowledge() {
       <div class="stat-foot">${c.foot}</div>
     </div>`).join("");
 
-  const topicMax = Math.max(1, ...data.topics.map(t => t.c));
-  $("#kbTopics").innerHTML = data.topics.length
-    ? data.topics.map(t => `
-      <div class="source-row">
-        <span class="source-name" title="${esc(t.topic)}">${esc(t.topic)}</span>
-        <span class="source-track"><span class="source-fill" style="width:${t.c / topicMax * 100}%"></span></span>
-        <span class="source-count">${t.c} 条</span>
-      </div>`).join("")
-    : `<div class="empty">还没有已读情报，标记已读后会在这里沉淀</div>`;
-
-  $("#kbRatings").innerHTML = ["high", "mid", "low"].map(r =>
-    `<span class="kb-rate ${r}">${RATING_LABELS[r]} ${data.ratings[r]}</span>`
-  ).join("");
-
-  const tierMax = Math.max(1, ...data.tiers.map(t => t.c));
-  $("#kbTiers").innerHTML = data.tiers.length
-    ? data.tiers.map(t => `
-      <div class="source-row">
-        <span class="source-name">${TIER_LABELS[t.tier] || "媒体"}</span>
-        <span class="source-track"><span class="source-fill" style="width:${t.c / tierMax * 100}%"></span></span>
-        <span class="source-count">${t.c} 条</span>
-      </div>`).join("")
-    : `<div class="empty">暂无信源构成</div>`;
+  loadKbSummary(3);
+  loadKbSummary(1);
 
   $("#kbRecent").innerHTML = data.recent.length
     ? data.recent.map(it => `
@@ -248,6 +227,26 @@ async function loadKnowledge() {
         </div>
       </div>`).join("")
     : `<div class="empty">还没有已读情报</div>`;
+}
+
+async function loadKbSummary(months) {
+  const body = $("#kbSummary" + months);
+  const chips = $("#kbSum" + months + "Chips");
+  const hint = $("#kbSum" + months + "Hint");
+  try {
+    const d = await api(`/api/knowledge/summary?months=${months}`);
+    body.textContent = d.text;
+    hint.textContent = `${months === 1 ? "近 30 天" : "近 90 天"}已读 · ${d.source === "ai" ? "模型总结" : "规则摘要"}`;
+    chips.innerHTML = d.total
+      ? [
+        `<span class="mini-tag">共 ${d.total} 条</span>`,
+        ...d.topics.slice(0, 3).map(t => `<span class="mini-tag">${esc(t.topic)} ${t.c}</span>`),
+        d.ratings.high ? `<span class="mini-tag">高 ${d.ratings.high}</span>` : "",
+      ].filter(Boolean).join("")
+      : "";
+  } catch (e) {
+    body.textContent = "知识总结生成失败：" + e.message;
+  }
 }
 
 /* ---------------- 人工投递 ---------------- */
