@@ -1,5 +1,6 @@
 """个人情报站 · 本地 Web 服务（零第三方依赖，python app.py 即可启动）。"""
 
+import base64
 import json
 import os
 import socket
@@ -18,6 +19,7 @@ import pipeline
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
+UPLOAD_DIR = os.path.join(config.DATA_DIR, "uploads")
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -25,6 +27,10 @@ MIME = {
     ".js": "application/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
     ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
     ".ico": "image/x-icon",
 }
 
@@ -53,6 +59,79 @@ class Api:
     def knowledge(self, q, body):
         return db.stats_knowledge(), 200
 
+    def intake(self, q, body):
+        limit = min(100, _to_int((q.get("limit") or [20])[0], 20))
+        return db.list_intake(limit), 200
+
+    def intake_add(self, q, body):
+        title = (body.get("title") or "").strip()
+        if not title:
+            return {"error": "请填写标题"}, 400
+        url = (body.get("url") or "").strip()
+        if url and not url.startswith(("http://", "https://")):
+            return {"error": "原文链接需以 http(s) 开头"}, 400
+        rating = (body.get("rating") or "").strip()
+        if rating not in ("", "low", "mid", "high"):
+            return {"error": "无效的人工评判"}, 400
+        try:
+            attachment = self._save_image(body.get("image"))
+        except ValueError as e:
+            return {"error": str(e)}, 400
+        channel = (body.get("channel") or "人工投递").strip() or "人工投递"
+        result = db.add_intake({
+            "title": title,
+            "url": url,
+            "author": (body.get("author") or "").strip(),
+            "channel": channel,
+            "summary": (body.get("summary") or "").strip(),
+            "content": (body.get("content") or "").strip(),
+            "tags": self._split_list(body.get("tags")),
+            "points": self._split_list(body.get("points")),
+            "importance": max(0, min(100, _to_int(body.get("importance"), 60))),
+            "rating": rating,
+            "topic": (body.get("topic") or "").strip(),
+            "reason": (body.get("note") or "").strip() or "人工投递",
+            "read": bool(body.get("read")),
+            "attachment": attachment,
+            "external_id": (body.get("external_id") or "").strip(),
+            "published_at": _to_int(body.get("published_at"), 0) or None,
+        })
+        if not result["duplicate"] and not (body.get("external_id") or "").strip():
+            db.add_event(f"人工投递 {title[:40]}（{channel}）")
+        return {"ok": True, **result}, 200
+
+    @staticmethod
+    def _split_list(value):
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        text = (value or "").replace("，", ",").replace("；", "\n").replace(";", "\n")
+        result = []
+        for chunk in text.splitlines():
+            result.extend(x.strip() for x in chunk.split(","))
+        return [x for x in result if x]
+
+    @staticmethod
+    def _save_image(data_url):
+        if not isinstance(data_url, str) or not data_url.startswith("data:image/"):
+            return ""
+        header, _, payload = data_url.partition(",")
+        ext = "png"
+        for candidate in ("jpeg", "jpg", "webp", "gif", "png"):
+            if candidate in header:
+                ext = "jpg" if candidate == "jpeg" else candidate
+                break
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except Exception:
+            raise ValueError("截图数据无法解析")
+        if len(raw) > 6 * 1024 * 1024:
+            raise ValueError("截图需小于 6MB")
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        name = f"intake_{int(time.time() * 1000)}_{os.urandom(3).hex()}.{ext}"
+        with open(os.path.join(UPLOAD_DIR, name), "wb") as f:
+            f.write(raw)
+        return "/uploads/" + name
+
     def items(self, q, body):
         data = db.query_items(
             status=(q.get("status") or ["all"])[0],
@@ -72,6 +151,10 @@ class Api:
         item = db.get_item(item_id)
         if not item:
             return {"error": "情报不存在"}, 404
+        if item.get("origin") == "manual":
+            item["source"] = item.get("channel") or "人工投递"
+            item["source_tier"] = "media"
+            return item, 200
         with db.get_db() as conn:
             row = conn.execute(
                 "SELECT title, url, tier FROM feeds WHERE id = ?", (item["feed_id"],)
@@ -115,9 +198,14 @@ class Api:
 
     def item_delete(self, q, body, item_id):
         with db.get_db() as conn:
-            row = conn.execute("SELECT title FROM items WHERE id = ?", (item_id,)).fetchone()
+            row = conn.execute("SELECT title, attachment FROM items WHERE id = ?", (item_id,)).fetchone()
             conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         if row:
+            if row["attachment"].startswith("/uploads/"):
+                try:
+                    os.remove(os.path.join(UPLOAD_DIR, os.path.basename(row["attachment"])))
+                except OSError:
+                    pass
             db.add_event(f"丢弃情报 {row['title'][:40]}")
         return {"ok": True}, 200
 
@@ -398,6 +486,8 @@ class Api:
 ROUTES = [
     ("GET", r"^/api/overview$", Api.overview, False),
     ("GET", r"^/api/knowledge$", Api.knowledge, False),
+    ("GET", r"^/api/intake$", Api.intake, False),
+    ("POST", r"^/api/intake$", Api.intake_add, False),
     ("GET", r"^/api/items$", Api.items, False),
     ("GET", r"^/api/items/(\d+)$", Api.item_detail, True),
     ("POST", r"^/api/items/(\d+)$", Api.item_update, True),
@@ -469,6 +559,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):
             self.dispatch("GET", parsed)
+        elif parsed.path.startswith("/uploads/"):
+            self.serve_upload(parsed.path)
         else:
             self.serve_static(parsed.path)
 
@@ -518,6 +610,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(500, b"internal error", "text/plain; charset=utf-8")
             return
+        self._send(200, data, MIME.get(ext, "application/octet-stream"))
+
+    def serve_upload(self, path):
+        name = os.path.basename(unquote(path))
+        full = os.path.join(UPLOAD_DIR, name)
+        if not name or not os.path.isfile(full):
+            self._send(404, b"not found", "text/plain; charset=utf-8")
+            return
+        try:
+            with open(full, "rb") as f:
+                data = f.read()
+        except Exception:
+            self._send(500, b"internal error", "text/plain; charset=utf-8")
+            return
+        ext = os.path.splitext(full)[1].lower()
         self._send(200, data, MIME.get(ext, "application/octet-stream"))
 
     @property

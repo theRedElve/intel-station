@@ -46,7 +46,10 @@ CREATE TABLE IF NOT EXISTS items (
     rating TEXT DEFAULT '',
     processed INTEGER DEFAULT 0,
     read INTEGER DEFAULT 0,
-    starred INTEGER DEFAULT 0
+    starred INTEGER DEFAULT 0,
+    origin TEXT DEFAULT 'rss',
+    channel TEXT DEFAULT '',
+    attachment TEXT DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_pub ON items(published_at DESC);
@@ -198,6 +201,12 @@ def _migrate(conn):
         conn.execute("ALTER TABLE items ADD COLUMN verify_hint TEXT DEFAULT ''")
     if "rating" not in item_cols:
         conn.execute("ALTER TABLE items ADD COLUMN rating TEXT DEFAULT ''")
+    if "origin" not in item_cols:
+        conn.execute("ALTER TABLE items ADD COLUMN origin TEXT DEFAULT 'rss'")
+    if "channel" not in item_cols:
+        conn.execute("ALTER TABLE items ADD COLUMN channel TEXT DEFAULT ''")
+    if "attachment" not in item_cols:
+        conn.execute("ALTER TABLE items ADD COLUMN attachment TEXT DEFAULT ''")
 
 
 def init_db():
@@ -306,7 +315,10 @@ def query_items(status="all", feed_id=None, topic=None, tag=None, q=None,
     order = "items.importance DESC, items.published_at DESC" if sort == "importance" \
         else "items.published_at DESC"
     sql = (
-        "SELECT items.*, feeds.title AS source, feeds.tier AS source_tier FROM items "
+        "SELECT items.*, "
+        "COALESCE(feeds.title, CASE WHEN items.origin = 'manual' "
+        "THEN COALESCE(NULLIF(items.channel, ''), '人工投递') ELSE '' END) AS source, "
+        "COALESCE(feeds.tier, 'media') AS source_tier FROM items "
         "LEFT JOIN feeds ON feeds.id = items.feed_id "
         f"WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ? OFFSET ?"
     )
@@ -425,7 +437,10 @@ def stats_knowledge():
             ).fetchall()
         ]
         rows = conn.execute(
-            """SELECT i.*, f.title AS source, f.tier AS source_tier
+            """SELECT i.*, 
+                      COALESCE(f.title, CASE WHEN i.origin = 'manual'
+                              THEN COALESCE(NULLIF(i.channel, ''), '人工投递') ELSE '' END) AS source,
+                      COALESCE(f.tier, 'media') AS source_tier
                  FROM items i LEFT JOIN feeds f ON f.id = i.feed_id
                 WHERE i.read = 1 ORDER BY i.fetched_at DESC LIMIT 12"""
         ).fetchall()
@@ -438,3 +453,51 @@ def stats_knowledge():
         "tiers": tiers,
         "recent": [row_to_item(r) for r in rows],
     }
+
+
+def add_intake(data):
+    """人工投递：写入一条非 RSS 情报，返回新建或命中去重的记录 id。"""
+    now = int(time.time())
+    external_id = (data.get("external_id") or "").strip()
+    dedupe_key = f"manual:{external_id}" if external_id else f"manual:{now}-{os.urandom(4).hex()}"
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO items
+               (feed_id, dedupe_key, url, title, author, published_at, fetched_at,
+                content, summary, key_points, tags, entities, importance, reason, topic,
+                verify_hint, rating, processed, read, starred, origin, channel, attachment)
+               VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,0,'manual',?,?)""",
+            (
+                dedupe_key,
+                data.get("url") or "",
+                data.get("title") or "",
+                data.get("author") or "",
+                int(data.get("published_at") or now),
+                now,
+                data.get("content") or "",
+                data.get("summary") or "",
+                json.dumps(data.get("points") or [], ensure_ascii=False),
+                json.dumps(data.get("tags") or [], ensure_ascii=False),
+                "[]",
+                int(data.get("importance") or 0),
+                data.get("reason") or "人工投递",
+                data.get("topic") or "",
+                "",
+                data.get("rating") or "",
+                1 if data.get("read") else 0,
+                data.get("channel") or "",
+                data.get("attachment") or "",
+            ),
+        )
+        if cur.lastrowid:
+            return {"id": cur.lastrowid, "duplicate": False}
+        row = conn.execute("SELECT id FROM items WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
+        return {"id": row["id"] if row else None, "duplicate": True}
+
+
+def list_intake(limit=20):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM items WHERE origin = 'manual' ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [row_to_item(r) for r in rows]

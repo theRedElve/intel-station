@@ -24,6 +24,9 @@
       <button class="nav-item" data-view="feed">
         <span class="nav-ico">☰</span><span>情报流</span><span class="nav-badge" id="navUnread">0</span>
       </button>
+      <button class="nav-item" data-view="intake">
+        <span class="nav-ico">＋</span><span>投递</span>
+      </button>
       <button class="nav-item" data-view="digest">
         <span class="nav-ico">▤</span><span>每日简报</span>
       </button>
@@ -125,6 +128,69 @@
       <div class="feed-meta" id="feedMeta"></div>
       <div class="feed-list" id="feedList"></div>
       <div class="load-more"><button class="btn ghost" id="btnMore">加载更多</button></div>
+    </section>
+
+    <!-- 人工投递 -->
+    <section class="view" id="view-intake">
+      <div class="intake-grid">
+        <div class="panel">
+          <div class="panel-head"><h3>人工投递</h3><span class="panel-hint">RSS 抓不到的信息，从这里补进来</span></div>
+          <form class="form intake-form" id="intakeForm">
+            <label>标题
+              <input class="input" name="title" required placeholder="例如：群里看到的一张数据截图">
+            </label>
+            <div class="row">
+              <label>渠道
+                <select class="select" name="channel">
+                  <option>飞书群</option>
+                  <option>截图</option>
+                  <option>网页</option>
+                  <option>口头</option>
+                  <option>其他</option>
+                </select>
+              </label>
+              <label>提供人 / 作者
+                <input class="input" name="author" placeholder="可选">
+              </label>
+            </div>
+            <label>原文链接
+              <input class="input" name="url" placeholder="https://…（可选）">
+            </label>
+            <div class="row">
+              <label>主题
+                <select class="select" name="topic" id="intakeTopic"><option value="">不指定</option></select>
+              </label>
+              <label>重要度
+                <input class="input tiny" name="importance" type="number" min="0" max="100" value="60">
+              </label>
+            </div>
+            <label>标签
+              <input class="input" name="tags" placeholder="逗号分隔，如 数据截图, 行业观察">
+            </label>
+            <label>内容 / 摘要
+              <textarea class="input textarea" name="summary" rows="4" placeholder="把截图里看到的关键信息、聊天结论写下来"></textarea>
+            </label>
+            <label>关键要点
+              <textarea class="input textarea" name="points" rows="2" placeholder="每行一条，可选"></textarea>
+            </label>
+            <div class="intake-image" id="intakeImageDrop" tabindex="0">
+              <input type="file" id="intakeImageInput" accept="image/*" hidden>
+              <div class="intake-image-hint" id="intakeImageHint">粘贴、拖入或点击上传截图（可选）</div>
+              <img class="intake-image-preview hidden" id="intakeImagePreview" alt="投递截图预览">
+            </div>
+            <div class="row intake-actions">
+              <label class="switch-row"><span>标记为已读（直接进入知识库）</span>
+                <input type="checkbox" name="read" class="switch"><i></i></label>
+              <button class="btn ghost" type="button" id="intakeClearImage">清除截图</button>
+              <button class="btn primary" type="submit">提交投递</button>
+            </div>
+          </form>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>最近投递</h3><span class="panel-hint" id="intakeSummary"></span></div>
+          <div class="mini-list" id="intakeRecent"></div>
+        </div>
+      </div>
     </section>
 
     <!-- 简报 -->

@@ -25,6 +25,7 @@ const state = {
 const VIEW_TITLES = {
   overview: ["总览", "你的私人情报工作流"],
   feed: ["情报流", "采集 · 加工 · 分级后的信息流"],
+  intake: ["投递", "把 RSS 抓不到的信息补进来"],
   digest: ["每日简报", "把一天的信息压缩成一页结论"],
   knowledge: ["知识库", "已读情报沉淀成的个人知识库"],
   sources: ["信息源", "管理 RSS 订阅与采集状态"],
@@ -120,6 +121,7 @@ function switchView(view) {
 
   if (view === "overview") loadOverview();
   if (view === "feed") loadFeed(true);
+  if (view === "intake") loadIntake();
   if (view === "digest") loadDigest();
   if (view === "knowledge") loadKnowledge();
   if (view === "sources") loadSources();
@@ -248,6 +250,50 @@ async function loadKnowledge() {
     : `<div class="empty">还没有已读情报</div>`;
 }
 
+/* ---------------- 人工投递 ---------------- */
+
+let intakeImage = "";
+
+async function loadIntake() {
+  let list;
+  try { list = await api("/api/intake?limit=20"); } catch (e) { return toast(e.message, "err"); }
+  $("#intakeSummary").textContent = list.length ? `最近 ${list.length} 条` : "还没有人工投递";
+  $("#intakeRecent").innerHTML = list.length
+    ? list.map(it => `
+      <div class="mini-item" data-open="${it.id}">
+        <div class="mini-score"><span class="score ${scoreClass(it.importance)}" style="padding:0;border:0;background:none">${it.importance}</span></div>
+        <div class="mini-body">
+          <div class="mini-title">${esc(it.title)}</div>
+          <div class="mini-meta">${esc(it.channel || "人工投递")}${it.author ? " · " + esc(it.author) : ""} · ${relTime(it.fetched_at)}${it.read ? " · 已读" : " · 未读"}</div>
+        </div>
+      </div>`).join("")
+    : `<div class="empty">把群里看到的截图或一句结论，从左侧投递进来。</div>`;
+}
+
+function setIntakeImage(dataUrl) {
+  intakeImage = dataUrl || "";
+  const preview = $("#intakeImagePreview");
+  const hint = $("#intakeImageHint");
+  if (!preview || !hint) return;
+  if (intakeImage) {
+    preview.src = intakeImage;
+    preview.classList.remove("hidden");
+    hint.classList.add("hidden");
+  } else {
+    preview.removeAttribute("src");
+    preview.classList.add("hidden");
+    hint.classList.remove("hidden");
+  }
+}
+
+function readImageFile(file) {
+  if (!file || !String(file.type || "").startsWith("image/")) return;
+  if (file.size > 6 * 1024 * 1024) return toast("截图需小于 6MB", "err");
+  const reader = new FileReader();
+  reader.onload = () => setIntakeImage(reader.result);
+  reader.readAsDataURL(file);
+}
+
 async function loadEvents() {
   try {
     const events = await api("/api/events?limit=30");
@@ -265,6 +311,7 @@ async function loadEvents() {
 
 function itemCard(it) {
   const cls = scoreClass(it.importance);
+  const manual = it.origin === "manual";
   const tags = (it.tags || []).filter(t => t !== it.topic).slice(0, 4)
     .map(t => `<span class="mini-tag">${esc(t)}</span>`).join("");
   return `
@@ -276,7 +323,7 @@ function itemCard(it) {
       ${it.summary ? `<p class="card-summary">${esc(it.summary)}</p>` : ""}
       <div class="card-foot">
         <span class="src">${esc(it.source || "未知来源")}</span>
-        ${tierBadge(it.source_tier)}
+        ${manual ? `<span class="mini-tag manual">人工</span>` : tierBadge(it.source_tier)}
         <i class="dot-sep"></i>
         <span>${relTime(it.published_at)}</span>
         ${it.topic ? `<span class="mini-tag">${esc(it.topic)}</span>` : ""}
@@ -439,6 +486,7 @@ async function openItem(id) {
     </div>
     <h2>${esc(it.title)}</h2>
     ${it.summary ? `<div class="modal-summary">${esc(it.summary)}</div>` : ""}
+    ${it.attachment ? `<h4>投递截图</h4><img class="modal-shot" src="${esc(it.attachment)}" alt="投递截图">` : ""}
     ${it.verify_hint ? `<div class="verify-note">文中出现「${esc(it.verify_hint)}」类引用，建议回源核对后再采信或转发。</div>` : ""}
     <div class="modal-rating"><span>人工评判</span>${ratingGroup(it)}</div>
     ${points}
@@ -978,6 +1026,67 @@ function bind() {
     finally { btn.disabled = false; btn.textContent = "添加"; }
   });
 
+  const imageDrop = $("#intakeImageDrop");
+  if (imageDrop) {
+    imageDrop.addEventListener("click", () => $("#intakeImageInput").click());
+    imageDrop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      imageDrop.classList.add("drag");
+    });
+    imageDrop.addEventListener("dragleave", () => imageDrop.classList.remove("drag"));
+    imageDrop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      imageDrop.classList.remove("drag");
+      readImageFile((e.dataTransfer.files || [])[0]);
+    });
+    $("#intakeImageInput").addEventListener("change", (e) => {
+      readImageFile((e.target.files || [])[0]);
+      e.target.value = "";
+    });
+    $("#intakeClearImage").addEventListener("click", () => setIntakeImage(""));
+    document.addEventListener("paste", (e) => {
+      if (state.view !== "intake") return;
+      const item = Array.from((e.clipboardData && e.clipboardData.items) || [])
+        .find(x => x.type.startsWith("image/"));
+      if (!item) return;
+      e.preventDefault();
+      readImageFile(item.getAsFile());
+    });
+  }
+
+  $("#intakeForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const f = form.elements;
+    const btn = $('button[type="submit"]', form);
+    btn.disabled = true;
+    try {
+      const res = await api("/api/intake", {
+        method: "POST",
+        body: {
+          title: f.title.value.trim(),
+          channel: f.channel.value,
+          author: f.author.value.trim(),
+          url: f.url.value.trim(),
+          topic: f.topic.value,
+          importance: Number(f.importance.value) || 0,
+          tags: f.tags.value.trim(),
+          summary: f.summary.value.trim(),
+          points: f.points.value,
+          read: f.read.checked,
+          image: intakeImage,
+        },
+      });
+      toast(res.duplicate ? "已存在相同投递" : (f.read.checked ? "已投递并进入知识库" : "已投递，可在情报流查看"), "ok");
+      form.reset();
+      f.importance.value = 60;
+      setIntakeImage("");
+      loadIntake();
+      loadSettingsCounters();
+    } catch (err) { toast(err.message, "err"); }
+    finally { btn.disabled = false; }
+  });
+
   $("#resourceForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -1085,5 +1194,10 @@ async function loadTopicsForFilter() {
     const topics = await api("/api/topics");
     $("#topicSelect").innerHTML = `<option value="">全部主题</option>` +
       topics.map(t => `<option value="${esc(t.name)}" ${t.name === state.topic ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+    const intake = $("#intakeTopic");
+    if (intake) {
+      intake.innerHTML = `<option value="">不指定</option>` +
+        topics.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+    }
   } catch (e) { /* ignore */ }
 }
