@@ -295,6 +295,13 @@ body {
 .card.high::before { background: var(--warn); }
 .card.mid::before { background: var(--blue); }
 .card.read { opacity: 0.62; }
+.card.leaving { animation: card-out 0.28s ease forwards; overflow: hidden; pointer-events: none; }
+@keyframes card-out {
+  to {
+    opacity: 0; transform: translateX(28px); max-height: 0;
+    margin: 0; padding-top: 0; padding-bottom: 0; border-width: 0;
+  }
+}
 .card-top { display: flex; align-items: flex-start; gap: 10px; }
 .card-title { font-size: 14.5px; font-weight: 600; line-height: 1.5; margin: 0; flex: 1; }
 .card-title a { color: inherit; text-decoration: none; }

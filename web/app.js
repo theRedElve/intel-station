@@ -446,11 +446,18 @@ function removeCard(id) {
   state.excluded.delete(id);
   state.offset = Math.max(0, state.offset - 1);
   state.total = Math.max(0, state.total - 1);
-  $$(`.card[data-open="${id}"]`).forEach(el => el.remove());
+  const cards = $$(`.card[data-open="${id}"]`);
+  cards.forEach(el => {
+    el.style.maxHeight = el.offsetHeight + "px";
+    el.classList.add("leaving");
+  });
   updateFeedMeta();
   syncSelectionUI();
   $("#btnMore").style.display = state.items.length < state.total ? "" : "none";
-  if (!state.items.length && state.total > 0) loadFeed(true);
+  setTimeout(() => {
+    cards.forEach(el => el.remove());
+    if (!state.items.length && state.total > 0) loadFeed(true);
+  }, 300);
 }
 
 async function discardItem(id) {
