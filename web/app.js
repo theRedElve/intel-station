@@ -446,13 +446,42 @@ async function loadTopics() {
 function editTopic(id) {
   const t = state.topics.find(x => x.id === id);
   if (!t) return;
-  const kws = window.prompt("关键词（用逗号分隔）", (t.keywords || []).join("，"));
-  if (kws === null) return;
-  const weight = window.prompt("权重 1-30（越大越提升重要度）", String(t.weight));
-  if (weight === null) return;
-  api(`/api/topics/${id}`, { method: "PATCH", body: { keywords: kws, weight: Number(weight) || 10 } })
-    .then(() => { toast("主题已更新", "ok"); loadTopics(); })
-    .catch(e => toast(e.message, "err"));
+  $("#modalBody").innerHTML = `
+    <h2>编辑主题</h2>
+    <div class="form">
+      <label>主题名称
+        <input class="input" id="topicEditName" value="${esc(t.name)}">
+      </label>
+      <label>关键词（用逗号分隔）
+        <input class="input" id="topicEditKws" value="${esc((t.keywords || []).join("，"))}">
+      </label>
+      <label>权重 <b class="weight-val" id="topicEditWeightVal">${t.weight}</b>
+        <input type="range" id="topicEditWeight" class="range" min="1" max="30" step="1" value="${t.weight}">
+      </label>
+      <p class="note">权重越高，命中该主题关键词时对重要度的加成越大（1-30）。修改只影响之后加工的情报，已入库的分数不变。</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn primary" id="topicEditSave">保存</button>
+      <button class="btn" id="topicEditCancel">取消</button>
+    </div>`;
+  $("#modalMask").classList.remove("hidden");
+
+  const range = $("#topicEditWeight");
+  range.addEventListener("input", () => { $("#topicEditWeightVal").textContent = range.value; });
+  $("#topicEditCancel").addEventListener("click", closeModal);
+  $("#topicEditSave").addEventListener("click", async () => {
+    const name = $("#topicEditName").value.trim();
+    if (!name) return toast("主题名称不能为空", "err");
+    try {
+      await api(`/api/topics/${id}`, {
+        method: "PATCH",
+        body: { name, keywords: $("#topicEditKws").value, weight: Number(range.value) }
+      });
+      closeModal();
+      toast("主题已更新", "ok");
+      loadTopics();
+    } catch (e) { toast(e.message, "err"); }
+  });
 }
 
 /* ---------------- 设置 ---------------- */

@@ -396,6 +396,27 @@ body {
 .form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
 .form .row { display: flex; align-items: center; gap: 12px; }
 .form .note { font-size: 11px; color: var(--muted-2); margin: 0; line-height: 1.7; }
+.form .range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: #1b2740;
+  outline: none;
+}
+.form .range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(53, 224, 178, 0.16);
+}
+.weight-val { color: var(--accent); font-weight: 600; margin-left: 2px; }
 .hint { font-size: 11.5px; color: var(--muted-2); }
 .hint.ok { color: #6fe3b9; }
 .hint.err { color: #ff9d9d; }
