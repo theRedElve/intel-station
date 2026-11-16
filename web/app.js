@@ -709,6 +709,13 @@ async function loadSettings() {
   $("#aiStatus").textContent = cfg.ai.api_key_set ? "已配置密钥" : "未配置密钥";
   $("#aiStatus").className = "hint " + (cfg.ai.api_key_set ? "ok" : "");
 
+  const ww = cfg.wewe || {};
+  $("#weweBaseUrl").value = ww.base_url || "";
+  $("#weweAuthCode").value = "";
+  $("#weweAuthCode").placeholder = ww.auth_code_set ? "已保存，留空则不修改" : "服务端未设置可留空";
+  $("#weweStatus").textContent = ww.auth_code_set ? "已配置授权码" : "未配置授权码";
+  $("#weweStatus").className = "hint " + (ww.auth_code_set ? "ok" : "");
+
   $("#schedMinutes").value = cfg.schedule.fetch_minutes;
   $("#schedLimit").value = cfg.schedule.process_limit;
   $("#schedDigest").value = cfg.schedule.digest_time;
@@ -737,6 +744,10 @@ async function saveSettings() {
       auto_process: $("#autoProcess").checked,
     },
     collect: { max_items_per_feed: Number($("#collectMax").value) || 30 },
+    wewe: {
+      base_url: $("#weweBaseUrl").value.trim(),
+      auth_code: $("#weweAuthCode").value.trim(),
+    },
   };
   try {
     const cfg = await api("/api/settings", { method: "POST", body: payload });
@@ -744,6 +755,7 @@ async function saveSettings() {
     $("#saveHint").textContent = "已保存 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
     $("#saveHint").className = "hint ok";
     $("#aiApiKey").value = "";
+    $("#weweAuthCode").value = "";
     toast("设置已保存", "ok");
   } catch (e) {
     $("#saveHint").textContent = e.message;
@@ -1103,6 +1115,58 @@ function bind() {
     } catch (err) {
       el.textContent = err.message;
       el.className = "hint err";
+    }
+  });
+
+  $("#btnTestWeWe").addEventListener("click", async () => {
+    const el = $("#weweStatus");
+    el.textContent = "测试中…";
+    el.className = "hint";
+    try {
+      const res = await api("/api/wewe/test", {
+        method: "POST",
+        body: {
+          base_url: $("#weweBaseUrl").value.trim(),
+          auth_code: $("#weweAuthCode").value.trim(),
+        },
+      });
+      el.textContent = `连接正常：已订阅 ${res.feeds} 个公众号`;
+      el.className = "hint ok";
+    } catch (err) {
+      el.textContent = err.message;
+      el.className = "hint err";
+    }
+  });
+
+  $("#btnWeWeSubscribe").addEventListener("click", async () => {
+    const el = $("#weweStatus");
+    const url = $("#weweArticle").value.trim();
+    if (!url) return toast("请先粘贴公众号文章链接", "err");
+    const btn = $("#btnWeWeSubscribe");
+    btn.disabled = true;
+    el.textContent = "解析并添加中…";
+    el.className = "hint";
+    try {
+      const res = await api("/api/wewe/subscribe", {
+        method: "POST",
+        body: {
+          url,
+          base_url: $("#weweBaseUrl").value.trim(),
+          auth_code: $("#weweAuthCode").value.trim(),
+        },
+      });
+      el.textContent = res.duplicate ? `已在信息源：${res.title}` : `已加入信息源：${res.title}`;
+      el.className = "hint ok";
+      toast(res.warning || (res.duplicate ? "该公众号已在信息源" : "已生成 RSS 并加入信息源"), res.warning ? "err" : "ok");
+      $("#weweArticle").value = "";
+      loadFeedsForFilter();
+      loadSettingsCounters();
+    } catch (err) {
+      el.textContent = err.message;
+      el.className = "hint err";
+      toast(err.message, "err");
+    } finally {
+      btn.disabled = false;
     }
   });
 }

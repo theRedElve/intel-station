@@ -312,6 +312,29 @@
         </div>
 
         <div class="panel">
+          <div class="panel-head"><h3>公众号转 RSS</h3><span class="panel-hint">WeWe RSS · SQLite</span></div>
+          <div class="form">
+            <label>WeWe RSS 地址
+              <input class="input" id="weweBaseUrl" placeholder="http://127.0.0.1:4000">
+            </label>
+            <label>授权码 AUTH_CODE
+              <input class="input" id="weweAuthCode" type="password" placeholder="服务端未设置可留空">
+            </label>
+            <div class="row">
+              <button class="btn ghost" id="btnTestWeWe">测试连接</button>
+              <span class="hint" id="weweStatus"></span>
+            </div>
+            <label>公众号文章链接
+              <input class="input" id="weweArticle" placeholder="https://mp.weixin.qq.com/s/…">
+            </label>
+            <div class="row">
+              <button class="btn" id="btnWeWeSubscribe">生成 RSS 并加入信息源</button>
+            </div>
+            <p class="note">先在 WeWe RSS 里扫码登录微信读书。添加会订阅该公众号全部文章；频率过高可能触发微信读书风控。</p>
+          </div>
+        </div>
+
+        <div class="panel">
           <div class="panel-head"><h3>数据</h3><span class="panel-hint">全部保存在本地 data 目录</span></div>
           <div class="form">
             <div class="kv"><span>数据库</span><code>data/intel.db</code></div>

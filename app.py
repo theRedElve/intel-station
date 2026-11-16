@@ -16,6 +16,7 @@ import config
 import db
 import feeds
 import pipeline
+import wewe
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
@@ -391,6 +392,9 @@ class Api:
         ai_part = new.get("ai", {})
         if ai_part and not ai_part.get("api_key"):
             ai_part["api_key"] = old["ai"].get("api_key", "")
+        wewe_part = new.get("wewe", {})
+        if wewe_part and not wewe_part.get("auth_code"):
+            wewe_part["auth_code"] = old.get("wewe", {}).get("auth_code", "")
         cfg = config.save_config(config._merge(old, new))
         db.add_event("更新系统设置")
         return config.public_config(cfg), 200
@@ -410,6 +414,47 @@ class Api:
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}, 400
         return {"ok": True, "reply": reply}, 200
+
+    def test_wewe(self, q, body):
+        cfg = config.load_config()
+        base = (body.get("base_url") or cfg["wewe"].get("base_url") or "").strip()
+        code = (body.get("auth_code") or "").strip() or cfg["wewe"].get("auth_code", "")
+        try:
+            return wewe.test_connection(base, code), 200
+        except wewe.WeweError as e:
+            return {"error": str(e)}, 400
+
+    def wewe_subscribe(self, q, body):
+        cfg = config.load_config()
+        base = (body.get("base_url") or cfg["wewe"].get("base_url") or "").strip()
+        code = (body.get("auth_code") or "").strip() or cfg["wewe"].get("auth_code", "")
+        try:
+            mp = wewe.resolve_mp(base, code, (body.get("url") or "").strip())
+            wewe.add_feed(base, code, mp)
+            rss = wewe.rss_url(base, mp["id"])
+        except wewe.WeweError as e:
+            return {"error": str(e)}, 400
+        title = mp.get("name") or mp["id"]
+        with db.get_db() as conn:
+            exists = conn.execute("SELECT id FROM feeds WHERE url = ?", (rss,)).fetchone()
+        if exists:
+            return {"ok": True, "duplicate": True, "title": title, "rss_url": rss}, 200
+        wewe.refresh(base, mp["id"])
+        result, status = self.feed_add(q, {
+            "url": rss, "title": title, "category": "公众号", "tier": "media",
+        })
+        if status != 200:
+            with db.get_db() as conn:
+                conn.execute(
+                    "INSERT INTO feeds (url, title, site_url, category, tier, created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (rss, title, "", "公众号", "media", int(time.time())),
+                )
+            db.add_event(f"公众号转 RSS：{title}（{rss}）")
+            return {"ok": True, "title": title, "rss_url": rss,
+                    "warning": result.get("error", "首次抓取失败，稍后采集")}, 200
+        db.add_event(f"公众号转 RSS：{title}（{rss}）")
+        return {"ok": True, "title": title, "rss_url": rss, "feed": result}, 200
 
     def resources(self, q, body):
         with db.get_db() as conn:
@@ -521,6 +566,8 @@ ROUTES = [
     ("GET", r"^/api/settings$", Api.settings, False),
     ("POST", r"^/api/settings$", Api.settings_save, False),
     ("POST", r"^/api/settings/test-ai$", Api.test_ai, False),
+    ("POST", r"^/api/wewe/test$", Api.test_wewe, False),
+    ("POST", r"^/api/wewe/subscribe$", Api.wewe_subscribe, False),
     ("GET", r"^/api/events$", Api.events, False),
     ("GET", r"^/api/resources$", Api.resources, False),
     ("POST", r"^/api/resources$", Api.resource_add, False),
