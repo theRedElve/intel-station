@@ -479,6 +479,7 @@ body {
 .modal li { font-size: 13px; color: #c6d2e4; margin: 4px 0; }
 .modal .content { font-size: 13px; color: #b9c6d9; white-space: pre-wrap; max-height: 300px; overflow: auto; line-height: 1.8; padding-right: 8px; }
 .modal-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.modal h2 + .modal-tags { margin: -2px 0 12px; }
 .modal-actions { display: flex; gap: 9px; margin-top: 22px; flex-wrap: wrap; }
 
 /* ---------- Toast ---------- */

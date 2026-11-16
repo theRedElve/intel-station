@@ -538,15 +538,14 @@ async function openItem(id) {
       ${it.topic ? `<span class="mini-tag">${esc(it.topic)}</span>` : ""}
     </div>
     <h2>${esc(it.title)}</h2>
+    ${tags}
     ${it.summary ? `<div class="modal-summary">${esc(it.summary)}</div>` : ""}
     ${it.attachment ? `<h4>投递截图</h4><img class="modal-shot" src="${esc(it.attachment)}" alt="投递截图">` : ""}
     ${it.verify_hint ? `<div class="verify-note">文中出现「${esc(it.verify_hint)}」类引用，建议回源核对后再采信或转发。</div>` : ""}
-    <div class="modal-rating"><span>人工评判</span>${ratingGroup(it)}</div>
     ${points}
-    ${it.reason ? `<h4>打分理由</h4><p class="hint">${esc(it.reason)}</p>` : ""}
     ${entities}
-    ${tags ? `<h4>标签</h4>${tags}` : ""}
     ${it.content ? `<h4>正文摘录</h4><div class="content">${esc(it.content)}</div>` : ""}
+    <div class="modal-rating"><span>人工评判</span>${ratingGroup(it)}</div>
     <div class="modal-actions">
       ${safeUrl(it.url) ? `<a class="btn primary" href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">打开原文 ↗</a>` : ""}
       <button class="btn ghost" data-modal-act="read" data-id="${it.id}" data-next="${it.read ? 0 : 1}">${it.read ? "标记未读" : "标记已读"}</button>
