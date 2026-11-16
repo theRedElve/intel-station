@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 本地数据（含你的收藏/已读记录，不入库）
+data/intel.db
+data/intel.db-*
+data/intel.db-shm
+data/intel.db-wal
+data/config.json
+data/config.json.tmp
+data/backup/
+
+# 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

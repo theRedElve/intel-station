@@ -1,0 +1,533 @@
+"""个人情报站 · 本地 Web 服务（零第三方依赖，python app.py 即可启动）。"""
+
+import json
+import os
+import socket
+import sys
+import threading
+import time
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlparse
+
+import ai
+import config
+import db
+import feeds
+import pipeline
+import push
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WEB_DIR = os.path.join(BASE_DIR, "web")
+
+MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+}
+
+
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+class Api:
+    """所有接口实现，返回 (payload, status)。"""
+
+    def overview(self, q, body):
+        return db.stats_overview(), 200
+
+    def items(self, q, body):
+        data = db.query_items(
+            status=(q.get("status") or ["all"])[0],
+            feed_id=_to_int((q.get("feed_id") or [0])[0]) or None,
+            topic=(q.get("topic") or [""])[0] or None,
+            tag=(q.get("tag") or [""])[0] or None,
+            q=(q.get("q") or [""])[0] or None,
+            min_importance=_to_int((q.get("min") or [0])[0]),
+            days=_to_int((q.get("days") or [0])[0]) or None,
+            sort=(q.get("sort") or ["time"])[0],
+            limit=min(100, _to_int((q.get("limit") or [20])[0], 20)),
+            offset=_to_int((q.get("offset") or [0])[0]),
+        )
+        return data, 200
+
+    def item_detail(self, q, body, item_id):
+        item = db.get_item(item_id)
+        if not item:
+            return {"error": "情报不存在"}, 404
+        with db.get_db() as conn:
+            row = conn.execute("SELECT title, url FROM feeds WHERE id = ?", (item["feed_id"],)).fetchone()
+        item["source"] = row["title"] if row else ""
+        return item, 200
+
+    def item_update(self, q, body, item_id):
+        fields = []
+        params = []
+        for key in ("read", "starred"):
+            if key in body:
+                fields.append(f"{key} = ?")
+                params.append(1 if body[key] else 0)
+        if not fields:
+            return {"error": "没有可更新字段"}, 400
+        params.append(item_id)
+        with db.get_db() as conn:
+            conn.execute(f"UPDATE items SET {', '.join(fields)} WHERE id = ?", params)
+        return {"ok": True}, 200
+
+    def feeds(self, q, body):
+        with db.get_db() as conn:
+            rows = conn.execute(
+                """SELECT f.*, COUNT(i.id) AS item_count,
+                          SUM(CASE WHEN i.read = 0 THEN 1 ELSE 0 END) AS unread
+                     FROM feeds f LEFT JOIN items i ON i.feed_id = f.id
+                    GROUP BY f.id ORDER BY f.id"""
+            ).fetchall()
+        return [dict(r) for r in rows], 200
+
+    def feed_add(self, q, body):
+        url = (body.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return {"error": "请填写完整的 http(s) 订阅地址"}, 400
+        category = (body.get("category") or "未分类").strip()
+        try:
+            meta, items = feeds.fetch_feed(url)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"订阅校验失败：{e}"}, 400
+        title = (body.get("title") or "").strip() or meta.get("title") or url
+        with db.get_db() as conn:
+            exists = conn.execute("SELECT id FROM feeds WHERE url = ?", (url,)).fetchone()
+            if exists:
+                return {"error": "该订阅已存在"}, 400
+            cur = conn.execute(
+                "INSERT INTO feeds (url, title, site_url, category, created_at) VALUES (?,?,?,?,?)",
+                (url, title, meta.get("site_url", ""), category, int(time.time())),
+            )
+            feed_id = cur.lastrowid
+        db.add_event(f"新增信息源 {title}（{url}）")
+        return {"ok": True, "id": feed_id, "title": title, "sample": len(items)}, 200
+
+    def feed_update(self, q, body, feed_id):
+        fields, params = [], []
+        for key in ("title", "category", "enabled"):
+            if key in body:
+                fields.append(f"{key} = ?")
+                params.append(body[key] if key != "enabled" else (1 if body[key] else 0))
+        if not fields:
+            return {"error": "没有可更新字段"}, 400
+        params.append(feed_id)
+        with db.get_db() as conn:
+            conn.execute(f"UPDATE feeds SET {', '.join(fields)} WHERE id = ?", params)
+        return {"ok": True}, 200
+
+    def feed_delete(self, q, body, feed_id):
+        with db.get_db() as conn:
+            row = conn.execute("SELECT title FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+            conn.execute("DELETE FROM feeds WHERE id = ?", (feed_id,))
+            conn.execute("DELETE FROM items WHERE feed_id = ?", (feed_id,))
+        if row:
+            db.add_event(f"删除信息源 {row['title']}")
+        return {"ok": True}, 200
+
+    def topics(self, q, body):
+        return pipeline.get_topics(), 200
+
+    def topic_add(self, q, body):
+        name = (body.get("name") or "").strip()
+        if not name:
+            return {"error": "请填写主题名称"}, 400
+        keywords = body.get("keywords") or []
+        if isinstance(keywords, str):
+            keywords = [k.strip() for k in keywords.replace("，", ",").split(",") if k.strip()]
+        weight = max(1, min(30, _to_int(body.get("weight"), 10)))
+        with db.get_db() as conn:
+            exists = conn.execute("SELECT id FROM topics WHERE name = ?", (name,)).fetchone()
+            if exists:
+                return {"error": "主题已存在"}, 400
+            conn.execute(
+                "INSERT INTO topics (name, keywords, weight, created_at) VALUES (?,?,?,?)",
+                (name, json.dumps(keywords, ensure_ascii=False), weight, int(time.time())),
+            )
+        db.add_event(f"新增关注主题 {name}")
+        return {"ok": True}, 200
+
+    def topic_update(self, q, body, topic_id):
+        fields, params = [], []
+        if "name" in body and body["name"].strip():
+            fields.append("name = ?")
+            params.append(body["name"].strip())
+        if "keywords" in body:
+            kws = body["keywords"]
+            if isinstance(kws, str):
+                kws = [k.strip() for k in kws.replace("，", ",").split(",") if k.strip()]
+            fields.append("keywords = ?")
+            params.append(json.dumps(kws, ensure_ascii=False))
+        if "weight" in body:
+            fields.append("weight = ?")
+            params.append(max(1, min(30, _to_int(body["weight"], 10))))
+        if "enabled" in body:
+            fields.append("enabled = ?")
+            params.append(1 if body["enabled"] else 0)
+        if not fields:
+            return {"error": "没有可更新字段"}, 400
+        params.append(topic_id)
+        with db.get_db() as conn:
+            conn.execute(f"UPDATE topics SET {', '.join(fields)} WHERE id = ?", params)
+        return {"ok": True}, 200
+
+    def topic_delete(self, q, body, topic_id):
+        with db.get_db() as conn:
+            conn.execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+        return {"ok": True}, 200
+
+    def task_run(self, q, body):
+        cfg = config.load_config()
+        feed_id = _to_int(body.get("feed_id")) or None
+        if pipeline.STATE.get("running"):
+            return {"busy": True, "message": "任务正在执行，请稍候"}, 200
+        threading.Thread(
+            target=lambda: pipeline.run_pipeline(cfg, feed_id=feed_id, do_process=True),
+            daemon=True,
+        ).start()
+        return {"ok": True, "started": True}, 200
+
+    def task_status(self, q, body):
+        st = pipeline.status()
+        st["last_result"] = pipeline.STATE.get("last_result")
+        return st, 200
+
+    def task_process(self, q, body):
+        cfg = config.load_config()
+        if pipeline.STATE.get("running"):
+            return {"busy": True, "message": "任务正在执行，请稍候"}, 200
+
+        def job():
+            if not pipeline.LOCK.acquire(blocking=False):
+                return
+            try:
+                pipeline._set_state(True, "加工队列")
+                pipeline.STATE["started_at"] = int(time.time())
+                for _ in range(10):
+                    res = pipeline.process_pending(
+                        cfg, progress=lambda m: pipeline._set_state(True, m)
+                    )
+                    if not res.get("processed"):
+                        break
+            finally:
+                pipeline._set_state(False, "空闲")
+                pipeline.STATE["started_at"] = None
+                pipeline.LOCK.release()
+
+        threading.Thread(target=job, daemon=True).start()
+        return {"ok": True, "started": True}, 200
+
+    def digest(self, q, body):
+        day = (q.get("day") or [pipeline.today_str()])[0]
+        return pipeline.get_digest(day), 200
+
+    def digest_generate(self, q, body):
+        day = (body.get("day") or pipeline.today_str()).strip()
+        result = pipeline.generate_digest(config.load_config(), day=day, use_ai=bool(body.get("use_ai", True)))
+        return result, 200
+
+    def digest_push(self, q, body):
+        cfg = config.load_config()
+        day = (body.get("day") or pipeline.today_str()).strip()
+        digest = pipeline.get_digest(day)
+        if not digest.get("content"):
+            digest = pipeline.generate_digest(cfg, day=day)
+        from datetime import datetime
+        start = int(datetime.strptime(day, "%Y-%m-%d").timestamp())
+        with db.get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM items WHERE fetched_at >= ? AND fetched_at < ? "
+                "ORDER BY importance DESC LIMIT 12",
+                (start, start + 86400),
+            ).fetchall()
+            fmap = {r["id"]: r["title"] for r in conn.execute("SELECT id, title FROM feeds").fetchall()}
+        items = []
+        for r in rows:
+            d = db.row_to_item(r)
+            d["source"] = fmap.get(d["feed_id"], "")
+            items.append(d)
+        try:
+            push.push_digest(day, digest["content"], items, cfg)
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)}, 400
+        db.add_event(f"已推送 {day} 简报")
+        return {"ok": True}, 200
+
+    def settings(self, q, body):
+        return config.public_config(config.load_config()), 200
+
+    def settings_save(self, q, body):
+        old = config.load_config()
+        new = body or {}
+        ai_part = new.get("ai", {})
+        if ai_part and not ai_part.get("api_key"):
+            ai_part["api_key"] = old["ai"].get("api_key", "")
+        email_part = new.get("push", {}).get("email", {})
+        if email_part and not email_part.get("password"):
+            email_part["password"] = old["push"]["email"].get("password", "")
+        cfg = config.save_config(config._merge(old, new))
+        db.add_event("更新系统设置")
+        return config.public_config(cfg), 200
+
+    def test_ai(self, q, body):
+        cfg = config.load_config()
+        if body.get("base_url"):
+            cfg["ai"]["base_url"] = body["base_url"]
+        if body.get("model"):
+            cfg["ai"]["model"] = body["model"]
+        if body.get("api_key"):
+            cfg["ai"]["api_key"] = body["api_key"]
+        if not cfg["ai"].get("api_key"):
+            return {"error": "请先填写 API Key"}, 400
+        try:
+            reply = ai.test_connection(cfg)
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)}, 400
+        return {"ok": True, "reply": reply}, 200
+
+    def test_push(self, q, body):
+        cfg = config.load_config()
+        webhook = (body.get("feishu_webhook") or cfg["push"].get("feishu_webhook") or "").strip()
+        if not webhook:
+            return {"error": "请先填写飞书 Webhook"}, 400
+        try:
+            push.send_feishu(webhook, "情报站连接测试", ["**连接成功**\n个人情报站已可以向你推送高价值情报。"],
+                             footer=time.strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)}, 400
+        return {"ok": True}, 200
+
+    def events(self, q, body):
+        return db.list_events(_to_int((q.get("limit") or [40])[0], 40)), 200
+
+    def rebuild_stats(self, q, body):
+        return db.stats_overview(), 200
+
+
+ROUTES = [
+    ("GET", r"^/api/overview$", Api.overview, False),
+    ("GET", r"^/api/items$", Api.items, False),
+    ("GET", r"^/api/items/(\d+)$", Api.item_detail, True),
+    ("POST", r"^/api/items/(\d+)$", Api.item_update, True),
+    ("GET", r"^/api/feeds$", Api.feeds, False),
+    ("POST", r"^/api/feeds$", Api.feed_add, False),
+    ("PATCH", r"^/api/feeds/(\d+)$", Api.feed_update, True),
+    ("DELETE", r"^/api/feeds/(\d+)$", Api.feed_delete, True),
+    ("GET", r"^/api/topics$", Api.topics, False),
+    ("POST", r"^/api/topics$", Api.topic_add, False),
+    ("PATCH", r"^/api/topics/(\d+)$", Api.topic_update, True),
+    ("DELETE", r"^/api/topics/(\d+)$", Api.topic_delete, True),
+    ("POST", r"^/api/tasks/run$", Api.task_run, False),
+    ("POST", r"^/api/tasks/process$", Api.task_process, False),
+    ("GET", r"^/api/tasks/status$", Api.task_status, False),
+    ("GET", r"^/api/digest$", Api.digest, False),
+    ("POST", r"^/api/digest/generate$", Api.digest_generate, False),
+    ("POST", r"^/api/digest/push$", Api.digest_push, False),
+    ("GET", r"^/api/settings$", Api.settings, False),
+    ("POST", r"^/api/settings$", Api.settings_save, False),
+    ("POST", r"^/api/settings/test-ai$", Api.test_ai, False),
+    ("POST", r"^/api/settings/test-push$", Api.test_push, False),
+    ("GET", r"^/api/events$", Api.events, False),
+]
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "IntelStation/1.0"
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
+
+    def _send(self, status, body, content_type):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except Exception:
+            pass
+
+    def send_json(self, payload, status=200):
+        body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        self._send(status, body, "application/json; charset=utf-8")
+
+    def read_body(self):
+        length = _to_int(self.headers.get("Content-Length"), 0)
+        if not length:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except Exception:
+            return {}
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/"):
+            self.dispatch("GET", parsed)
+        else:
+            self.serve_static(parsed.path)
+
+    def do_POST(self):
+        self.dispatch("POST", urlparse(self.path))
+
+    def do_PATCH(self):
+        self.dispatch("PATCH", urlparse(self.path))
+
+    def do_DELETE(self):
+        self.dispatch("DELETE", urlparse(self.path))
+
+    def dispatch(self, method, parsed):
+        import re as _re
+
+        body = self.read_body() if method in ("POST", "PATCH", "PUT") else {}
+        for r_method, pattern, func, has_id in ROUTES:
+            if r_method != method:
+                continue
+            m = _re.match(pattern, parsed.path)
+            if not m:
+                continue
+            q = parse_qs(parsed.query)
+            try:
+                if has_id:
+                    payload, status = func(self.api, q, body, int(m.group(1)))
+                else:
+                    payload, status = func(self.api, q, body)
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                db.add_event(f"接口异常 {parsed.path}: {str(e)[:160]}", level="error")
+                payload, status = {"error": str(e)}, 500
+            self.send_json(payload, status)
+            return
+        self.send_json({"error": "接口不存在"}, 404)
+
+    def serve_static(self, path):
+        rel = unquote(path).lstrip("/") or "index.html"
+        full = os.path.normpath(os.path.join(WEB_DIR, rel))
+        if not full.startswith(WEB_DIR) or not os.path.isfile(full):
+            full = os.path.join(WEB_DIR, "index.html")
+            rel = "index.html"
+        ext = os.path.splitext(full)[1].lower()
+        try:
+            with open(full, "rb") as f:
+                data = f.read()
+        except Exception:
+            self._send(500, b"internal error", "text/plain; charset=utf-8")
+            return
+        self._send(200, data, MIME.get(ext, "application/octet-stream"))
+
+    @property
+    def api(self):
+        return Api()
+
+
+def scheduler():
+    """后台调度：定时采集加工，定点生成并推送日报。"""
+    last_digest_day = ""
+    while True:
+        try:
+            cfg = config.load_config()
+            interval = max(5, _to_int(cfg["schedule"].get("fetch_minutes"), 30))
+            with db.get_db() as conn:
+                last = conn.execute("SELECT MAX(last_fetch_at) m FROM feeds").fetchone()["m"] or 0
+            due_at = last + interval * 60 if last else time.time() + interval * 60
+            if time.time() >= due_at and not pipeline.STATE.get("running"):
+                db.add_event(f"定时任务触发（间隔 {interval} 分钟）")
+                pipeline.run_pipeline(cfg)
+
+            digest_time = cfg["schedule"].get("digest_time") or "09:00"
+            now_hm = time.strftime("%H:%M")
+            today = pipeline.today_str()
+            if now_hm >= digest_time and last_digest_day != today:
+                with db.get_db() as conn:
+                    has_items = conn.execute(
+                        "SELECT COUNT(*) c FROM items WHERE fetched_at >= ?",
+                        (int(time.time()) - 86400,),
+                    ).fetchone()["c"]
+                if has_items:
+                    result = pipeline.generate_digest(cfg, day=today)
+                    last_digest_day = today
+                    if cfg["push"].get("enabled"):
+                        try:
+                            push.push_digest(today, result["content"], [], cfg)
+                        except Exception as e:  # noqa: BLE001
+                            db.add_event(f"日报推送失败：{str(e)[:150]}", level="error")
+        except Exception as e:  # noqa: BLE001
+            db.add_event(f"调度器异常：{str(e)[:160]}", level="error")
+        time.sleep(30)
+
+
+def bootstrap_first_run():
+    with db.get_db() as conn:
+        count = conn.execute("SELECT COUNT(*) c FROM items").fetchone()["c"]
+    if count > 0:
+        return
+    time.sleep(3)
+    db.add_event("首次启动，开始初始化采集")
+    cfg = config.load_config()
+    pipeline.run_pipeline(cfg)
+    for _ in range(6):
+        res = pipeline.process_pending(cfg, limit=200)
+        if not res.get("processed"):
+            break
+
+
+def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    db.init_db()
+    cfg = config.load_config()
+    host = cfg["server"]["host"]
+    port = int(cfg["server"]["port"])
+
+    httpd = None
+    for candidate in range(port, port + 20):
+        try:
+            httpd = ThreadingHTTPServer((host, candidate), Handler)
+            port = candidate
+            break
+        except OSError:
+            continue
+    if httpd is None:
+        print("端口被占用，启动失败")
+        return
+
+    threading.Thread(target=scheduler, daemon=True).start()
+    threading.Thread(target=bootstrap_first_run, daemon=True).start()
+
+    url = f"http://{host}:{port}"
+    print("=" * 52)
+    print("  个人情报站已启动")
+    print(f"  访问地址: {url}")
+    print("  按 Ctrl+C 停止")
+    print("=" * 52)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\n已停止")
+    finally:
+        httpd.server_close()
+
+
+if __name__ == "__main__":
+    main()

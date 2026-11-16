@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>个人情报站 · INTEL STATION</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><span></span><span></span><span></span></div>
+      <div class="brand-text">
+        <div class="brand-name">情报站</div>
+        <div class="brand-sub">INTEL STATION</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="overview">
+        <span class="nav-ico">◫</span><span>总览</span>
+      </button>
+      <button class="nav-item" data-view="feed">
+        <span class="nav-ico">☰</span><span>情报流</span><span class="nav-badge" id="navUnread">0</span>
+      </button>
+      <button class="nav-item" data-view="digest">
+        <span class="nav-ico">▤</span><span>每日简报</span>
+      </button>
+      <button class="nav-item" data-view="sources">
+        <span class="nav-ico">◈</span><span>信息源</span>
+      </button>
+      <button class="nav-item" data-view="topics">
+        <span class="nav-ico">◎</span><span>关注主题</span>
+      </button>
+      <button class="nav-item" data-view="settings">
+        <span class="nav-ico">⚙</span><span>设置与推送</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="status-line">
+        <span class="pulse" id="runDot"></span>
+        <span id="runText">空闲</span>
+      </div>
+      <div class="foot-meta" id="footMeta">本地运行 · 数据不出本机</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb"><h1 id="crumb">总览</h1><p id="crumbSub">你的私人情报工作流</p></div>
+      <div class="top-actions">
+        <div class="search">
+          <span class="search-ico">⌕</span>
+          <input id="globalSearch" type="search" placeholder="搜索标题、摘要、正文…" autocomplete="off">
+        </div>
+        <button class="btn ghost" id="btnProcess">加工队列 <b id="pendingCount">0</b></button>
+        <button class="btn primary" id="btnFetch"><span class="btn-dot"></span>立即采集</button>
+      </div>
+    </header>
+
+    <!-- 总览 -->
+    <section class="view active" id="view-overview">
+      <div class="stats" id="statsGrid"></div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>近 7 日情报流量</h3>
+            <span class="panel-hint" id="trendTotal"></span>
+          </div>
+          <div class="chart" id="trendChart"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>热点标签</h3><span class="panel-hint">模型自动归纳</span></div>
+          <div class="tagcloud" id="tagCloud"></div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>最新高价值情报</h3>
+            <button class="link" data-goto="feed" data-status="high">查看全部 →</button>
+          </div>
+          <div class="mini-list" id="highList"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>运行日志</h3><span class="panel-hint">实时</span></div>
+          <div class="events" id="eventList"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>信息源活跃度</h3><button class="link" data-goto="sources">管理信息源 →</button></div>
+        <div class="source-bars" id="sourceBars"></div>
+      </div>
+    </section>
+
+    <!-- 情报流 -->
+    <section class="view" id="view-feed">
+      <div class="filterbar">
+        <div class="chips" id="statusChips">
+          <button class="chip active" data-status="all">全部</button>
+          <button class="chip" data-status="unread">未读</button>
+          <button class="chip" data-status="high">高价值</button>
+          <button class="chip" data-status="starred">收藏</button>
+        </div>
+        <select id="feedSelect" class="select"><option value="">全部来源</option></select>
+        <select id="sortSelect" class="select">
+          <option value="time">按时间排序</option>
+          <option value="importance">按重要度排序</option>
+        </select>
+        <input id="feedSearch" class="input slim" type="search" placeholder="在当前结果中搜索">
+      </div>
+      <div class="feed-meta" id="feedMeta"></div>
+      <div class="feed-list" id="feedList"></div>
+      <div class="load-more"><button class="btn ghost" id="btnMore">加载更多</button></div>
+    </section>
+
+    <!-- 简报 -->
+    <section class="view" id="view-digest">
+      <div class="digest-bar">
+        <input type="date" id="digestDate" class="input">
+        <button class="btn ghost" id="btnGenDigest">生成简报</button>
+        <button class="btn ghost" id="btnPushDigest">推送到飞书</button>
+        <button class="btn ghost" id="btnCopyDigest">复制 Markdown</button>
+        <span class="digest-hint" id="digestHint"></span>
+      </div>
+      <article class="digest" id="digestBody"></article>
+    </section>
+
+    <!-- 信息源 -->
+    <section class="view" id="view-sources">
+      <div class="panel">
+        <div class="panel-head"><h3>添加 RSS 订阅</h3><span class="panel-hint">支持 RSS 2.0 / Atom / RDF</span></div>
+        <form class="inline-form" id="feedForm">
+          <input class="input" name="url" placeholder="https://example.com/feed" required>
+          <input class="input narrow" name="title" placeholder="名称（可留空自动识别）">
+          <input class="input narrow" name="category" placeholder="分类，如 AI">
+          <button class="btn primary" type="submit">添加</button>
+        </form>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>订阅列表</h3><span class="panel-hint" id="feedSummary"></span></div>
+        <div class="table-wrap"><table class="table" id="feedTable"></table></div>
+      </div>
+    </section>
+
+    <!-- 主题 -->
+    <section class="view" id="view-topics">
+      <div class="panel">
+        <div class="panel-head"><h3>关注主题</h3><span class="panel-hint">命中关键词的情报会获得更高重要度</span></div>
+        <form class="inline-form" id="topicForm">
+          <input class="input narrow" name="name" placeholder="主题名称" required>
+          <input class="input" name="keywords" placeholder="关键词，用逗号分隔，如 大模型,Agent,算力">
+          <input class="input tiny" name="weight" type="number" min="1" max="30" value="10" title="权重 1-30">
+          <button class="btn primary" type="submit">新增主题</button>
+        </form>
+      </div>
+      <div class="topic-grid" id="topicGrid"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="view" id="view-settings">
+      <div class="settings-grid">
+        <div class="panel">
+          <div class="panel-head"><h3>大模型接入</h3><span class="panel-hint">OpenAI 兼容协议</span></div>
+          <div class="form">
+            <label class="switch-row"><span>启用模型加工</span>
+              <input type="checkbox" id="aiEnabled" class="switch"><i></i></label>
+            <label>Base URL
+              <input class="input" id="aiBaseUrl" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+            </label>
+            <label>API Key
+              <input class="input" id="aiApiKey" type="password" placeholder="留空则保持不变">
+            </label>
+            <label>模型名称
+              <input class="input" id="aiModel" placeholder="doubao-seed-1-6-250615">
+            </label>
+            <label>每批条数
+              <input class="input tiny" id="aiBatch" type="number" min="1" max="20">
+            </label>
+            <div class="row">
+              <button class="btn ghost" id="btnTestAI">测试连接</button>
+              <span class="hint" id="aiStatus"></span>
+            </div>
+            <p class="note">接口地址填到 /api/v3 即可，系统会自动拼接 /chat/completions。豆包、DeepSeek、通义、Kimi 都兼容。</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>采集与加工</h3><span class="panel-hint">自动化节奏</span></div>
+          <div class="form">
+            <label>采集间隔（分钟）
+              <input class="input tiny" id="schedMinutes" type="number" min="5" max="720">
+            </label>
+            <label>单次加工上限
+              <input class="input tiny" id="schedLimit" type="number" min="5" max="200">
+            </label>
+            <label>每日简报时间
+              <input class="input tiny" id="schedDigest" type="time">
+            </label>
+            <label class="switch-row"><span>采集后自动加工</span>
+              <input type="checkbox" id="autoProcess" class="switch"><i></i></label>
+            <label class="switch-row"><span>加工后即时推送高价值</span>
+              <input type="checkbox" id="pushOnFetch" class="switch"><i></i></label>
+            <label>每个订阅单次最多抓取
+              <input class="input tiny" id="collectMax" type="number" min="5" max="200">
+            </label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>推送</h3><span class="panel-hint">飞书群机器人</span></div>
+          <div class="form">
+            <label class="switch-row"><span>开启推送</span>
+              <input type="checkbox" id="pushEnabled" class="switch"><i></i></label>
+            <label>飞书 Webhook
+              <input class="input" id="pushWebhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+            </label>
+            <label>重要度阈值（≥ 才推送）
+              <input class="input tiny" id="pushMin" type="number" min="0" max="100">
+            </label>
+            <label>单次最多推送条数
+              <input class="input tiny" id="pushMax" type="number" min="1" max="20">
+            </label>
+            <div class="row">
+              <button class="btn ghost" id="btnTestPush">发送测试消息</button>
+              <span class="hint" id="pushStatus"></span>
+            </div>
+            <p class="note">在飞书群 → 设置 → 群机器人 → 添加自定义机器人，复制 Webhook 地址即可。</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>邮件推送</h3><span class="panel-hint">可选</span></div>
+          <div class="form">
+            <label class="switch-row"><span>启用邮件</span>
+              <input type="checkbox" id="emailEnabled" class="switch"><i></i></label>
+            <label>SMTP 服务器
+              <input class="input" id="smtpHost" placeholder="smtp.qq.com">
+            </label>
+            <label>端口
+              <input class="input tiny" id="smtpPort" type="number">
+            </label>
+            <label>账号
+              <input class="input" id="smtpUser" placeholder="you@example.com">
+            </label>
+            <label>授权码 / 密码
+              <input class="input" id="smtpPass" type="password" placeholder="留空则保持不变">
+            </label>
+            <label>收件人
+              <input class="input" id="smtpTo" placeholder="a@example.com,b@example.com">
+            </label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>数据</h3><span class="panel-hint">全部保存在本地 data 目录</span></div>
+          <div class="form">
+            <div class="kv"><span>数据库</span><code>data/intel.db</code></div>
+            <div class="kv"><span>配置文件</span><code>data/config.json</code></div>
+            <div class="kv"><span>收录情报</span><b id="dataTotal">-</b></div>
+            <p class="note">建议定期备份整个 data 目录。删除数据库后重启即可重新初始化。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="save-bar">
+        <span class="hint" id="saveHint"></span>
+        <button class="btn primary" id="btnSaveSettings">保存设置</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal-mask hidden" id="modalMask">
+  <div class="modal" role="dialog" aria-modal="true">
+    <button class="modal-close" id="modalClose">×</button>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
