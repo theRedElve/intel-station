@@ -26,6 +26,7 @@ const VIEW_TITLES = {
   overview: ["总览", "你的私人情报工作流"],
   feed: ["情报流", "采集 · 加工 · 分级后的信息流"],
   digest: ["每日简报", "把一天的信息压缩成一页结论"],
+  knowledge: ["知识库", "已读情报沉淀成的个人知识库"],
   sources: ["信息源", "管理 RSS 订阅与采集状态"],
   resources: ["资源库", "权威信息源导航与信源分级"],
   topics: ["关注主题", "用关键词定义你的情报雷达"],
@@ -120,6 +121,7 @@ function switchView(view) {
   if (view === "overview") loadOverview();
   if (view === "feed") loadFeed(true);
   if (view === "digest") loadDigest();
+  if (view === "knowledge") loadKnowledge();
   if (view === "sources") loadSources();
   if (view === "resources") loadResources();
   if (view === "topics") loadTopics();
@@ -187,6 +189,63 @@ async function loadOverview() {
   } catch (e) { /* ignore */ }
 
   loadEvents();
+}
+
+async function loadKnowledge() {
+  let data;
+  try { data = await api("/api/knowledge"); } catch (e) { return toast(e.message, "err"); }
+
+  const rated = data.ratings.low + data.ratings.mid + data.ratings.high;
+  const cards = [
+    { label: "已读沉淀", value: data.read_total, unit: "条", foot: "标记已读即进入知识库", cls: "" },
+    { label: "其中收藏", value: data.starred, unit: "条", foot: "重点回看", cls: "blue" },
+    { label: "平均重要度", value: data.avg_importance, unit: "", foot: "已读情报均分", cls: "accent" },
+    {
+      label: "人工已评判", value: rated, unit: "条", cls: "warn",
+      foot: `低 ${data.ratings.low} · 中 ${data.ratings.mid} · 高 ${data.ratings.high}`,
+    },
+  ];
+  $("#kbStats").innerHTML = cards.map(c => `
+    <div class="stat ${c.cls}">
+      <div class="stat-label">${c.label}</div>
+      <div class="stat-value">${c.value}${c.unit ? `<small>${c.unit}</small>` : ""}</div>
+      <div class="stat-foot">${c.foot}</div>
+    </div>`).join("");
+
+  const topicMax = Math.max(1, ...data.topics.map(t => t.c));
+  $("#kbTopics").innerHTML = data.topics.length
+    ? data.topics.map(t => `
+      <div class="source-row">
+        <span class="source-name" title="${esc(t.topic)}">${esc(t.topic)}</span>
+        <span class="source-track"><span class="source-fill" style="width:${t.c / topicMax * 100}%"></span></span>
+        <span class="source-count">${t.c} 条</span>
+      </div>`).join("")
+    : `<div class="empty">还没有已读情报，标记已读后会在这里沉淀</div>`;
+
+  $("#kbRatings").innerHTML = ["high", "mid", "low"].map(r =>
+    `<span class="kb-rate ${r}">${RATING_LABELS[r]} ${data.ratings[r]}</span>`
+  ).join("");
+
+  const tierMax = Math.max(1, ...data.tiers.map(t => t.c));
+  $("#kbTiers").innerHTML = data.tiers.length
+    ? data.tiers.map(t => `
+      <div class="source-row">
+        <span class="source-name">${TIER_LABELS[t.tier] || "媒体"}</span>
+        <span class="source-track"><span class="source-fill" style="width:${t.c / tierMax * 100}%"></span></span>
+        <span class="source-count">${t.c} 条</span>
+      </div>`).join("")
+    : `<div class="empty">暂无信源构成</div>`;
+
+  $("#kbRecent").innerHTML = data.recent.length
+    ? data.recent.map(it => `
+      <div class="mini-item" data-open="${it.id}">
+        <div class="mini-score"><span class="score ${scoreClass(it.importance)}" style="padding:0;border:0;background:none">${it.importance}</span></div>
+        <div class="mini-body">
+          <div class="mini-title">${esc(it.title)}</div>
+          <div class="mini-meta">${esc(it.source || "")} · ${relTime(it.published_at)}${it.rating ? ` · 评判 ${RATING_LABELS[it.rating]}` : ""}${it.starred ? " · ★" : ""}</div>
+        </div>
+      </div>`).join("")
+    : `<div class="empty">还没有已读情报</div>`;
 }
 
 async function loadEvents() {

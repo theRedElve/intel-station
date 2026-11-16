@@ -390,3 +390,51 @@ def stats_overview():
         "topics": topic_counts,
         "last_fetch_at": last_fetch,
     }
+
+
+def stats_knowledge():
+    """已读情报沉淀出的知识库统计。"""
+    with get_db() as conn:
+        read_total = conn.execute("SELECT COUNT(*) c FROM items WHERE read = 1").fetchone()["c"]
+        starred = conn.execute(
+            "SELECT COUNT(*) c FROM items WHERE read = 1 AND starred = 1"
+        ).fetchone()["c"]
+        avg_imp = conn.execute(
+            "SELECT AVG(importance) a FROM items WHERE read = 1"
+        ).fetchone()["a"]
+        ratings = {"low": 0, "mid": 0, "high": 0}
+        for r in conn.execute(
+            "SELECT rating, COUNT(*) c FROM items WHERE read = 1 AND rating != '' GROUP BY rating"
+        ).fetchall():
+            if r["rating"] in ratings:
+                ratings[r["rating"]] = r["c"]
+        topics = [
+            dict(r)
+            for r in conn.execute(
+                """SELECT topic, COUNT(*) c FROM items
+                    WHERE read = 1 AND topic != ''
+                    GROUP BY topic ORDER BY c DESC LIMIT 8"""
+            ).fetchall()
+        ]
+        tiers = [
+            dict(r)
+            for r in conn.execute(
+                """SELECT COALESCE(f.tier, 'media') tier, COUNT(*) c
+                     FROM items i LEFT JOIN feeds f ON f.id = i.feed_id
+                    WHERE i.read = 1 GROUP BY tier"""
+            ).fetchall()
+        ]
+        rows = conn.execute(
+            """SELECT i.*, f.title AS source, f.tier AS source_tier
+                 FROM items i LEFT JOIN feeds f ON f.id = i.feed_id
+                WHERE i.read = 1 ORDER BY i.fetched_at DESC LIMIT 12"""
+        ).fetchall()
+    return {
+        "read_total": read_total,
+        "starred": starred,
+        "avg_importance": round(avg_imp or 0, 1),
+        "ratings": ratings,
+        "topics": topics,
+        "tiers": tiers,
+        "recent": [row_to_item(r) for r in rows],
+    }

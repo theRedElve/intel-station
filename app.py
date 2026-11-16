@@ -50,6 +50,9 @@ class Api:
     def overview(self, q, body):
         return db.stats_overview(), 200
 
+    def knowledge(self, q, body):
+        return db.stats_knowledge(), 200
+
     def items(self, q, body):
         data = db.query_items(
             status=(q.get("status") or ["all"])[0],
@@ -394,6 +397,7 @@ class Api:
 
 ROUTES = [
     ("GET", r"^/api/overview$", Api.overview, False),
+    ("GET", r"^/api/knowledge$", Api.knowledge, False),
     ("GET", r"^/api/items$", Api.items, False),
     ("GET", r"^/api/items/(\d+)$", Api.item_detail, True),
     ("POST", r"^/api/items/(\d+)$", Api.item_update, True),

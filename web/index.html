@@ -27,6 +27,9 @@
       <button class="nav-item" data-view="digest">
         <span class="nav-ico">▤</span><span>每日简报</span>
       </button>
+      <button class="nav-item" data-view="knowledge">
+        <span class="nav-ico">✦</span><span>知识库</span>
+      </button>
       <button class="nav-item" data-view="sources">
         <span class="nav-ico">◈</span><span>信息源</span>
       </button>
@@ -133,6 +136,30 @@
         <span class="digest-hint" id="digestHint"></span>
       </div>
       <article class="digest" id="digestBody"></article>
+    </section>
+
+    <!-- 知识库 -->
+    <section class="view" id="view-knowledge">
+      <div class="stats" id="kbStats"></div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-head"><h3>已读主题分布</h3><span class="panel-hint">已读情报按主题统计</span></div>
+          <div class="source-bars" id="kbTopics"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>评判与信源构成</h3><span class="panel-hint">人工评判 / 信源等级</span></div>
+          <div class="kb-chips" id="kbRatings"></div>
+          <div class="source-bars" id="kbTiers"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>最近沉淀</h3>
+          <button class="link" data-goto="feed" data-status="read">查看全部已读 →</button>
+        </div>
+        <div class="mini-list" id="kbRecent"></div>
+      </div>
     </section>
 
     <!-- 信息源 -->
