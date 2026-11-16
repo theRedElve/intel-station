@@ -7,6 +7,7 @@ const state = {
   view: "overview",
   status: "all",
   feedId: "",
+  topic: "",
   sort: "time",
   q: "",
   tag: "",
@@ -245,6 +246,7 @@ async function loadFeed(reset = false) {
     offset: state.offset,
   });
   if (state.feedId) params.set("feed_id", state.feedId);
+  if (state.topic) params.set("topic", state.topic);
   if (state.q) params.set("q", state.q);
   if (state.tag) params.set("tag", state.tag);
 
@@ -286,7 +288,7 @@ async function toggleItem(id, field, force) {
 }
 
 function updateFeedMeta() {
-  $("#feedMeta").textContent = `共 ${state.total} 条${state.tag ? ` · 标签「${state.tag}」` : ""}${state.q ? ` · 搜索「${state.q}」` : ""}`;
+  $("#feedMeta").textContent = `共 ${state.total} 条${state.topic ? ` · 主题「${state.topic}」` : ""}${state.tag ? ` · 标签「${state.tag}」` : ""}${state.q ? ` · 搜索「${state.q}」` : ""}`;
 }
 
 function removeCard(id) {
@@ -913,6 +915,7 @@ function bind() {
     loadFeed(true);
   });
   $("#feedSelect").addEventListener("change", (e) => { state.feedId = e.target.value; loadFeed(true); });
+  $("#topicSelect").addEventListener("change", (e) => { state.topic = e.target.value; loadFeed(true); });
   $("#sortSelect").addEventListener("change", (e) => { state.sort = e.target.value; loadFeed(true); });
 
   let searchTimer = null;
@@ -1060,6 +1063,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#digestDate").value = new Date().toISOString().slice(0, 10);
   switchView(location.hash.replace("#", "") || "overview");
   loadFeedsForFilter();
+  loadTopicsForFilter();
   loadSettingsCounters();
   pollStatus(true);
 });
@@ -1070,5 +1074,13 @@ async function loadFeedsForFilter() {
     state.feeds = feeds;
     $("#feedSelect").innerHTML = `<option value="">全部来源</option>` +
       feeds.map(f => `<option value="${f.id}">${esc(f.title)}</option>`).join("");
+  } catch (e) { /* ignore */ }
+}
+
+async function loadTopicsForFilter() {
+  try {
+    const topics = await api("/api/topics");
+    $("#topicSelect").innerHTML = `<option value="">全部主题</option>` +
+      topics.map(t => `<option value="${esc(t.name)}" ${t.name === state.topic ? "selected" : ""}>${esc(t.name)}</option>`).join("");
   } catch (e) { /* ignore */ }
 }
