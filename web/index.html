@@ -120,6 +120,11 @@
         <input id="feedSearch" class="input slim" type="search" placeholder="在当前结果中搜索">
       </div>
       <div class="feed-meta" id="feedMeta"></div>
+      <div class="feed-toolbar">
+        <label class="pick-all"><input type="checkbox" id="selectAll"> 全选当前筛选</label>
+        <span class="toolbar-hint" id="selectHint">已选 0 条</span>
+        <button class="btn danger" id="discardSelected" disabled>丢弃选中</button>
+      </div>
       <div class="feed-list" id="feedList"></div>
       <div class="load-more"><button class="btn ghost" id="btnMore">加载更多</button></div>
     </section>

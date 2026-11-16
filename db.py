@@ -280,8 +280,8 @@ def get_item(item_id):
     return row_to_item(row) if row else None
 
 
-def query_items(status="all", feed_id=None, topic=None, tag=None, q=None,
-                min_importance=0, days=None, sort="time", limit=20, offset=0):
+def _item_where(status="all", feed_id=None, topic=None, tag=None, q=None,
+                min_importance=0, days=None):
     where = ["1=1"]
     params = []
     if status == "unread":
@@ -311,6 +311,37 @@ def query_items(status="all", feed_id=None, topic=None, tag=None, q=None,
     if days:
         where.append("items.published_at >= ?")
         params.append(int(time.time()) - days * 86400)
+    return where, params
+
+
+def discard_items(ids=None, status="all", feed_id=None, topic=None, tag=None,
+                  q=None, min_importance=0, days=None, exclude=None):
+    """按 id 列表或筛选条件批量删除情报，返回被删除行的 id/title/attachment。"""
+    where, params = _item_where(status, feed_id, topic, tag, q, min_importance, days)
+    if exclude:
+        where.append(f"items.id NOT IN ({','.join('?' * len(exclude))})")
+        params.extend(exclude)
+    sql_where = " AND ".join(where)
+    with get_db() as conn:
+        if ids:
+            marks = ",".join("?" * len(ids))
+            rows = conn.execute(
+                f"SELECT id, title, attachment FROM items WHERE id IN ({marks})", ids
+            ).fetchall()
+            if rows:
+                conn.execute(f"DELETE FROM items WHERE id IN ({marks})", ids)
+        else:
+            rows = conn.execute(
+                f"SELECT id, title, attachment FROM items WHERE {sql_where}", params
+            ).fetchall()
+            if rows:
+                conn.execute(f"DELETE FROM items WHERE {sql_where}", params)
+    return [dict(r) for r in rows]
+
+
+def query_items(status="all", feed_id=None, topic=None, tag=None, q=None,
+                min_importance=0, days=None, sort="time", limit=20, offset=0):
+    where, params = _item_where(status, feed_id, topic, tag, q, min_importance, days)
 
     order = "items.importance DESC, items.published_at DESC" if sort == "importance" \
         else "items.published_at DESC"

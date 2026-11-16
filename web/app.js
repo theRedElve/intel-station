@@ -15,6 +15,9 @@ const state = {
   limit: 12,
   total: 0,
   items: [],
+  selected: new Set(),
+  excluded: new Set(),
+  allSelected: false,
   running: false,
   overview: null,
   feeds: [],
@@ -284,11 +287,13 @@ async function loadEvents() {
 function itemCard(it) {
   const cls = scoreClass(it.importance);
   const manual = it.origin === "manual";
+  const picked = state.allSelected ? !state.excluded.has(it.id) : state.selected.has(it.id);
   const tags = (it.tags || []).filter(t => t !== it.topic).slice(0, 4)
     .map(t => `<span class="mini-tag">${esc(t)}</span>`).join("");
   return `
     <article class="card ${cls} ${it.read ? "read" : ""}" data-open="${it.id}">
       <div class="card-top">
+        <input type="checkbox" class="pick" data-pick="${it.id}" title="选择这条情报"${picked ? " checked" : ""}>
         <span class="score ${cls}" title="${esc(it.reason || "")}">${it.importance}</span>
         <h3 class="card-title">${esc(it.title)}</h3>
       </div>
@@ -315,6 +320,7 @@ async function loadFeed(reset = false) {
   if (reset) {
     state.offset = 0;
     state.items = [];
+    clearSelection(false);
     $("#feedList").innerHTML = "";
   }
   const params = new URLSearchParams({
@@ -339,6 +345,71 @@ async function loadFeed(reset = false) {
     ? state.items.map(itemCard).join("")
     : `<div class="panel"><div class="empty">这里还没有情报。点击右上角「立即采集」抓取一次，或在信息源里添加订阅。</div></div>`;
   $("#btnMore").style.display = state.items.length < data.total ? "" : "none";
+  syncSelectionUI();
+}
+
+function selectionCount() {
+  return state.allSelected
+    ? Math.max(0, state.total - state.excluded.size)
+    : state.selected.size;
+}
+
+function syncSelectionUI() {
+  const count = selectionCount();
+  const all = $("#selectAll");
+  if (all) all.checked = state.allSelected ? !state.excluded.size : (count > 0 && count >= state.total);
+  const hint = $("#selectHint");
+  if (hint) hint.textContent = `已选 ${count} 条 / 共 ${state.total} 条`;
+  const btn = $("#discardSelected");
+  if (btn) btn.disabled = count === 0;
+}
+
+function clearSelection(refresh = true) {
+  state.selected.clear();
+  state.excluded.clear();
+  state.allSelected = false;
+  if (refresh) syncSelectionUI();
+}
+
+function togglePick(id, checked) {
+  if (state.allSelected) {
+    if (checked) state.excluded.delete(id);
+    else state.excluded.add(id);
+  } else if (checked) {
+    state.selected.add(id);
+  } else {
+    state.selected.delete(id);
+  }
+  syncSelectionUI();
+}
+
+async function discardSelected() {
+  const count = selectionCount();
+  if (!count) return;
+  if (!confirm(`确定丢弃 ${count} 条情报？删除后不可恢复。`)) return;
+  const body = state.allSelected
+    ? {
+      all: true,
+      exclude: Array.from(state.excluded),
+      status: state.status,
+      feed_id: state.feedId || undefined,
+      topic: state.topic || undefined,
+      tag: state.tag || undefined,
+      q: state.q || undefined,
+    }
+    : { ids: Array.from(state.selected) };
+  const btn = $("#discardSelected");
+  btn.disabled = true;
+  try {
+    const res = await api("/api/items/discard", { method: "POST", body });
+    toast(`已丢弃 ${res.deleted} 条情报`, "ok");
+    clearSelection(false);
+    loadFeed(true);
+    loadOverview();
+  } catch (e) {
+    toast(e.message, "err");
+    syncSelectionUI();
+  }
 }
 
 async function toggleItem(id, field, force) {
@@ -371,10 +442,13 @@ function updateFeedMeta() {
 
 function removeCard(id) {
   state.items = state.items.filter(i => i.id !== id);
+  state.selected.delete(id);
+  state.excluded.delete(id);
   state.offset = Math.max(0, state.offset - 1);
   state.total = Math.max(0, state.total - 1);
   $$(`.card[data-open="${id}"]`).forEach(el => el.remove());
   updateFeedMeta();
+  syncSelectionUI();
   $("#btnMore").style.display = state.items.length < state.total ? "" : "none";
   if (!state.items.length && state.total > 0) loadFeed(true);
 }
@@ -855,6 +929,13 @@ function bind() {
       return;
     }
 
+    const pick = e.target.closest("[data-pick]");
+    if (pick) {
+      e.stopPropagation();
+      togglePick(Number(pick.dataset.pick), pick.checked);
+      return;
+    }
+
     const open = e.target.closest("[data-open]");
     if (open) {
       const act = e.target.closest("[data-act]");
@@ -968,6 +1049,19 @@ function bind() {
   });
   $("#feedSelect").addEventListener("change", (e) => { state.feedId = e.target.value; loadFeed(true); });
   $("#topicSelect").addEventListener("change", (e) => { state.topic = e.target.value; loadFeed(true); });
+
+  $("#selectAll").addEventListener("change", (e) => {
+    if (e.target.checked) {
+      state.allSelected = true;
+      state.selected.clear();
+      state.excluded.clear();
+    } else {
+      clearSelection(false);
+    }
+    $$("#feedList [data-pick]").forEach(cb => { cb.checked = e.target.checked; });
+    syncSelectionUI();
+  });
+  $("#discardSelected").addEventListener("click", discardSelected);
 
   let searchTimer = null;
   $("#feedSearch").addEventListener("input", (e) => {

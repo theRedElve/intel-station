@@ -222,6 +222,39 @@ class Api:
             db.add_event(f"丢弃情报 {row['title'][:40]}")
         return {"ok": True}, 200
 
+    def items_discard(self, q, body):
+        ids = body.get("ids") or []
+        if ids:
+            ids = [_to_int(i) for i in ids]
+            ids = [i for i in ids if i > 0]
+            if not ids:
+                return {"error": "请选择要丢弃的情报"}, 400
+            rows = db.discard_items(ids=ids)
+        elif body.get("all"):
+            exclude = [_to_int(i) for i in (body.get("exclude") or [])]
+            rows = db.discard_items(
+                status=(body.get("status") or "all"),
+                feed_id=_to_int(body.get("feed_id")) or None,
+                topic=(body.get("topic") or "") or None,
+                tag=(body.get("tag") or "") or None,
+                q=(body.get("q") or "") or None,
+                min_importance=_to_int(body.get("min_importance")),
+                days=_to_int(body.get("days")) or None,
+                exclude=[i for i in exclude if i > 0] or None,
+            )
+        else:
+            return {"error": "请选择要丢弃的情报"}, 400
+        for row in rows:
+            att = row.get("attachment") or ""
+            if att.startswith("/uploads/"):
+                try:
+                    os.remove(os.path.join(UPLOAD_DIR, os.path.basename(att)))
+                except OSError:
+                    pass
+        if rows:
+            db.add_event(f"批量丢弃 {len(rows)} 条情报")
+        return {"ok": True, "deleted": len(rows)}, 200
+
     def feeds(self, q, body):
         with db.get_db() as conn:
             rows = conn.execute(
@@ -547,6 +580,7 @@ ROUTES = [
     ("GET", r"^/api/intake$", Api.intake, False),
     ("POST", r"^/api/intake$", Api.intake_add, False),
     ("GET", r"^/api/items$", Api.items, False),
+    ("POST", r"^/api/items/discard$", Api.items_discard, False),
     ("GET", r"^/api/items/(\d+)$", Api.item_detail, True),
     ("POST", r"^/api/items/(\d+)$", Api.item_update, True),
     ("DELETE", r"^/api/items/(\d+)$", Api.item_delete, True),
