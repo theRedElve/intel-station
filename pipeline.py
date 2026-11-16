@@ -15,6 +15,89 @@ STATE = {"running": False, "stage": "空闲", "started_at": None, "last_result":
 
 HIGH_VALUE = 70
 
+DIGEST_SECTIONS = ["行业动态跟踪", "竞品追踪", "政策变化"]
+
+INDUSTRY_KEYWORDS = {
+    "AI 行业": [
+        "人工智能", "大模型", "生成式", "机器学习", "深度学习", "神经网络", "多模态",
+        "智能体", "算力", "推理", "微调", "具身智能", "ai", "llm", "gpt", "chatgpt",
+        "openai", "anthropic", "claude", "gemini", "deepseek", "transformer", "rag",
+        "英伟达", "nvidia", "通义", "文心", "豆包", "kimi",
+    ],
+    "服装行业": [
+        "服装", "服饰", "女装", "男装", "童装", "成衣", "鞋服", "运动鞋", "运动服",
+        "羽绒服", "快时尚", "纺织", "面料", "服装品牌", "优衣库", "zara", "h&m",
+        "shein", "安踏", "李宁", "波司登", "森马", "太平鸟", "海澜之家", "耐克",
+        "阿迪达斯", "lululemon", "nike", "adidas",
+    ],
+}
+
+POLICY_KEYWORDS = [
+    "政策", "监管", "法规", "条例", "规定", "办法", "通知", "公告", "征求意见",
+    "国家标准", "行业标准", "合规", "反垄断", "关税", "出口管制", "补贴", "备案",
+    "国务院", "工信部", "商务部", "发改委", "网信办", "市场监管", "欧盟", "白宫",
+]
+
+COMPETITOR_KEYWORDS = [
+    "竞品", "竞对", "融资", "收购", "并购", "财报", "营收", "估值", "ipo",
+    "裁员", "发布会", "新品", "联名", "品牌代言", "开源", "市场份额",
+]
+
+
+def _kw_hit(text, kw):
+    if re.fullmatch(r"[a-z0-9&+.\- ]+", kw):
+        return re.search(r"(?<![a-z0-9])" + re.escape(kw) + r"(?![a-z0-9])", text) is not None
+    return kw in text
+
+
+def _digest_head(item):
+    return " ".join([
+        item.get("title") or "",
+        item.get("summary") or "",
+        " ".join(item.get("tags") or []),
+    ]).lower()
+
+
+def _digest_industry(item):
+    head = _digest_head(item)
+    scores = {name: sum(1 for k in kws if _kw_hit(head, k)) for name, kws in INDUSTRY_KEYWORDS.items()}
+    if not any(scores.values()):
+        body = (item.get("content") or "").lower()
+        scores = {
+            name: sum(1 for k in kws if _kw_hit(body, k)) for name, kws in INDUSTRY_KEYWORDS.items()
+        }
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 2 else None
+
+
+def _digest_section(item):
+    head = _digest_head(item)
+    title = (item.get("title") or "").lower()
+    policy_hits = sum(1 for k in POLICY_KEYWORDS if _kw_hit(head, k))
+    if policy_hits >= 2 or (policy_hits and any(_kw_hit(title, k) for k in POLICY_KEYWORDS)):
+        return "政策变化"
+    comp_hits = sum(1 for k in COMPETITOR_KEYWORDS if _kw_hit(head, k))
+    if comp_hits >= 2 or (comp_hits and any(_kw_hit(title, k) for k in COMPETITOR_KEYWORDS)):
+        return "竞品追踪"
+    return "行业动态跟踪"
+
+
+def _digest_line(item):
+    source = item.get("source") or ("人工投递" if item.get("origin") == "manual" else "")
+    meta = " · ".join(x for x in [
+        source,
+        f"重要度 {item.get('importance', 0)}",
+        "、".join(item.get("tags") or []),
+    ] if x)
+    line = f"- **{item.get('title') or '（无标题）'}**"
+    if item.get("summary"):
+        line += f" — {item['summary'][:80]}"
+    if meta:
+        line += f"（{meta}）"
+    if item.get("url"):
+        line += f" [原文]({item['url']})"
+    return line
+
 
 def status():
     return dict(STATE)
@@ -331,36 +414,35 @@ def generate_digest(cfg, day=None, use_ai=True):
     verify_items = [i for i in items if i.get("verify_hint")]
     overview = ai.write_digest_overview(day, items, cfg) if (use_ai and ai.is_ready(cfg)) else ""
 
+    buckets = {name: {sec: [] for sec in DIGEST_SECTIONS} for name in INDUSTRY_KEYWORDS}
+    for it in items:
+        industry = _digest_industry(it)
+        if industry:
+            buckets[industry][_digest_section(it)].append(it)
+    tracked = sum(len(g) for sections in buckets.values() for g in sections.values())
+    others = len(items) - tracked
+
     lines = [f"# 每日情报简报 · {day}", ""]
-    lines.append(f"> 今日收录 **{len(items)}** 条，其中高价值 **{len(top)}** 条，"
-                 f"覆盖 **{len({i['source'] for i in items})}** 个信息源，"
-                 f"**{len(verify_items)}** 条引用数据或研究结论待回源核对。")
+    lines.append(f"> 今日收录 **{len(items)}** 条，其中高价值 **{len(top)}** 条；"
+                 f"AI 行业 **{sum(len(g) for g in buckets['AI 行业'].values())}** 条，"
+                 f"服装行业 **{sum(len(g) for g in buckets['服装行业'].values())}** 条"
+                 + (f"，其余 **{others}** 条为其他行业" if others else "")
+                 + f"；**{len(verify_items)}** 条引用数据或研究结论待回源核对。")
     lines.append("")
 
     if overview:
         lines += ["## 今日综述", "", overview, ""]
 
-    if top:
-        lines += ["## 关键情报", ""]
-        for it in top[:12]:
-            lines.append(f"### [{it['importance']}] {it['title']}")
-            if it.get("summary"):
-                lines.append(it["summary"])
-            if it.get("key_points"):
-                lines.append("")
-                for p in it["key_points"]:
-                    lines.append(f"- {p}")
-            meta = " · ".join(x for x in [
-                f"{it.get('source', '')}［{ai.TIER_LABELS.get(it.get('source_tier') or 'media', '媒体')}］" if it.get("source") else "",
-                time.strftime("%m-%d %H:%M", time.localtime(it.get("published_at") or time.time())),
-                "、".join(it.get("tags", [])),
-            ] if x)
-            if it.get("verify_hint"):
-                lines.append(f"> 建议回源核对（{it['verify_hint']}）")
-            if it.get("url"):
-                lines.append(f"\n[{meta}]({it['url']})")
-            else:
-                lines.append(f"\n{meta}")
+    for industry, sections in buckets.items():
+        lines += [f"## {industry}", ""]
+        for section in DIGEST_SECTIONS:
+            group = sections[section][:3]
+            lines += [f"### {section}", ""]
+            if not group:
+                lines += ["今日暂无该板块情报。", ""]
+                continue
+            for it in group:
+                lines.append(_digest_line(it))
             lines.append("")
 
     if verify_items:
@@ -369,24 +451,6 @@ def generate_digest(cfg, day=None, use_ai=True):
             lines.append(f"- **[{it['importance']}] {it['title']}** · {it.get('source', '')}"
                          f" · 命中「{it['verify_hint']}」")
         lines.append("")
-
-    grouped = {}
-    for it in items:
-        key = it.get("topic") or "其他动态"
-        grouped.setdefault(key, []).append(it)
-    if grouped:
-        lines += ["## 主题动态", ""]
-        for topic, group in grouped.items():
-            high_n = len([x for x in group if x["importance"] >= HIGH_VALUE])
-            lines.append(f"**{topic}** · {len(group)} 条（高价值 {high_n}）")
-            for it in group[:5]:
-                lines.append(f"- [{it['importance']}] {it['title']} — {it.get('summary', '')[:60]}")
-            lines.append("")
-
-    lines += ["## 全部情报", ""]
-    for it in items[:40]:
-        src = it.get("source", "")
-        lines.append(f"- **[{it['importance']}] {it['title']}** · {src}")
 
     content = "\n".join(lines).strip() + "\n"
     _save_digest(day, content, len(items))
