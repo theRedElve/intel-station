@@ -87,7 +87,7 @@ class Api:
                 """SELECT f.*, COUNT(i.id) AS item_count,
                           SUM(CASE WHEN i.read = 0 THEN 1 ELSE 0 END) AS unread
                      FROM feeds f LEFT JOIN items i ON i.feed_id = f.id
-                    GROUP BY f.id ORDER BY f.id"""
+                    GROUP BY f.id ORDER BY f.enabled DESC, f.id"""
             ).fetchall()
         return [dict(r) for r in rows], 200
 
