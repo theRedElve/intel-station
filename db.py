@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS items (
     reason TEXT DEFAULT '',
     topic TEXT DEFAULT '',
     verify_hint TEXT DEFAULT '',
+    rating TEXT DEFAULT '',
     processed INTEGER DEFAULT 0,
     read INTEGER DEFAULT 0,
     starred INTEGER DEFAULT 0,
@@ -196,6 +197,8 @@ def _migrate(conn):
     item_cols = _columns(conn, "items")
     if "verify_hint" not in item_cols:
         conn.execute("ALTER TABLE items ADD COLUMN verify_hint TEXT DEFAULT ''")
+    if "rating" not in item_cols:
+        conn.execute("ALTER TABLE items ADD COLUMN rating TEXT DEFAULT ''")
 
 
 def init_db():
@@ -275,6 +278,8 @@ def query_items(status="all", feed_id=None, topic=None, tag=None, q=None,
     params = []
     if status == "unread":
         where.append("items.read = 0")
+    elif status == "read":
+        where.append("items.read = 1")
     elif status == "high":
         where.append("items.importance >= 70")
     elif status == "starred":

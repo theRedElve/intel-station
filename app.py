@@ -42,6 +42,9 @@ def _tier(value, default="media"):
     return value if value in db.TIERS else default
 
 
+RATING_DELTA = {"low": -25, "mid": 0, "high": 12}
+
+
 class Api:
     """所有接口实现，返回 (payload, status)。"""
 
@@ -76,17 +79,44 @@ class Api:
         return item, 200
 
     def item_update(self, q, body, item_id):
-        fields = []
-        params = []
+        simple = {}
         for key in ("read", "starred"):
             if key in body:
-                fields.append(f"{key} = ?")
-                params.append(1 if body[key] else 0)
-        if not fields:
+                simple[key] = 1 if body[key] else 0
+        rating = body.get("rating")
+        if rating is not None:
+            rating = (rating or "").strip()
+            if rating not in ("", "low", "mid", "high"):
+                return {"error": "无效的人工评判"}, 400
+        if not simple and rating is None:
             return {"error": "没有可更新字段"}, 400
-        params.append(item_id)
+        importance = None
         with db.get_db() as conn:
-            conn.execute(f"UPDATE items SET {', '.join(fields)} WHERE id = ?", params)
+            row = conn.execute(
+                "SELECT importance, rating FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if not row:
+                return {"error": "情报不存在"}, 404
+            if simple:
+                fields = ", ".join(f"{k} = ?" for k in simple)
+                conn.execute(f"UPDATE items SET {fields} WHERE id = ?",
+                             list(simple.values()) + [item_id])
+            if rating is not None:
+                old_delta = RATING_DELTA.get(row["rating"] or "", 0)
+                importance = max(0, min(100, row["importance"] - old_delta + RATING_DELTA.get(rating, 0)))
+                conn.execute("UPDATE items SET rating = ?, importance = ? WHERE id = ?",
+                             (rating, importance, item_id))
+        result = {"ok": True}
+        if importance is not None:
+            result.update({"rating": rating, "importance": importance})
+        return result, 200
+
+    def item_delete(self, q, body, item_id):
+        with db.get_db() as conn:
+            row = conn.execute("SELECT title FROM items WHERE id = ?", (item_id,)).fetchone()
+            conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        if row:
+            db.add_event(f"丢弃情报 {row['title'][:40]}")
         return {"ok": True}, 200
 
     def feeds(self, q, body):
@@ -410,6 +440,7 @@ ROUTES = [
     ("GET", r"^/api/items$", Api.items, False),
     ("GET", r"^/api/items/(\d+)$", Api.item_detail, True),
     ("POST", r"^/api/items/(\d+)$", Api.item_update, True),
+    ("DELETE", r"^/api/items/(\d+)$", Api.item_delete, True),
     ("GET", r"^/api/feeds$", Api.feeds, False),
     ("POST", r"^/api/feeds$", Api.feed_add, False),
     ("PATCH", r"^/api/feeds/(\d+)$", Api.feed_update, True),

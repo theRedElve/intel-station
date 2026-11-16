@@ -512,6 +512,24 @@ body {
 .resource-actions { display: flex; gap: 6px; margin-top: 4px; }
 .resource-actions .mini-btn { text-decoration: none; }
 
+/* ---------- 人工评判 / 丢弃 ---------- */
+.rating-group { display: inline-flex; gap: 2px; align-items: center; }
+.rating-btn {
+  border: 1px solid transparent; background: transparent; color: var(--muted-2);
+  font-family: inherit; font-size: 10px; line-height: 1; padding: 4px 5px;
+  border-radius: 5px; cursor: pointer; transition: all 0.15s;
+}
+.rating-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.rating-btn.on.low { color: #ff9b9b; background: rgba(255, 107, 107, 0.12); border-color: rgba(255, 107, 107, 0.35); }
+.rating-btn.on.mid { color: #ffd479; background: rgba(255, 196, 84, 0.12); border-color: rgba(255, 196, 84, 0.35); }
+.rating-btn.on.high { color: #6fe3b9; background: rgba(53, 224, 178, 0.12); border-color: rgba(53, 224, 178, 0.35); }
+.icon-btn.danger:hover { color: #ff6b6b; background: rgba(255, 107, 107, 0.1); }
+.btn.danger { color: #ff9b9b; border-color: rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.06); }
+.btn.danger:hover { background: rgba(255, 107, 107, 0.14); }
+.modal-rating { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+.modal-rating .rating-btn { font-size: 11px; padding: 5px 11px; border-color: var(--line); }
+.modal-rating .rating-btn.on { border-color: currentColor; }
+
 @media (max-width: 1080px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .grid-2 { grid-template-columns: 1fr; }

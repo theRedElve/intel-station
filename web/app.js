@@ -12,6 +12,7 @@ const state = {
   tag: "",
   offset: 0,
   limit: 12,
+  total: 0,
   items: [],
   running: false,
   overview: null,
@@ -31,10 +32,19 @@ const VIEW_TITLES = {
 };
 
 const TIER_LABELS = { official: "官方", industry: "行业", media: "媒体" };
+const RATING_LABELS = { low: "低", mid: "中", high: "高" };
 
 function tierBadge(tier) {
   const t = tier && TIER_LABELS[tier] ? tier : "media";
   return `<span class="tier-badge ${t}">${TIER_LABELS[t]}</span>`;
+}
+
+function ratingGroup(it) {
+  return `<span class="rating-group" title="人工评判，会影响重要度">
+    ${["low", "mid", "high"].map(r =>
+      `<button class="rating-btn ${r} ${it.rating === r ? "on" : ""}" data-rate="${r}" data-id="${it.id}">${RATING_LABELS[r]}</button>`
+    ).join("")}
+  </span>`;
 }
 
 /* ---------------- 基础工具 ---------------- */
@@ -213,8 +223,10 @@ function itemCard(it) {
         ${it.verify_hint ? `<span class="verify-badge" title="命中「${esc(it.verify_hint)}」，建议回源核对">建议回源核对</span>` : ""}
         <div class="card-tags">${tags}</div>
         <div class="card-actions">
+          ${ratingGroup(it)}
           <button class="icon-btn ${it.starred ? "on" : ""}" data-act="star" data-id="${it.id}" title="收藏">★</button>
           <button class="icon-btn ${it.read ? "on" : ""}" data-act="read" data-id="${it.id}" title="标记已读">✓</button>
+          <button class="icon-btn danger" data-discard="${it.id}" title="丢弃（直接删除）">✕</button>
         </div>
       </div>
     </article>`;
@@ -240,8 +252,9 @@ async function loadFeed(reset = false) {
   try { data = await api("/api/items?" + params.toString()); } catch (e) { return toast(e.message, "err"); }
   state.items = state.items.concat(data.items);
   state.offset += data.items.length;
+  state.total = data.total;
 
-  $("#feedMeta").textContent = `共 ${data.total} 条${state.tag ? ` · 标签「${state.tag}」` : ""}${state.q ? ` · 搜索「${state.q}」` : ""}`;
+  updateFeedMeta();
   $("#feedList").innerHTML = state.items.length
     ? state.items.map(itemCard).join("")
     : `<div class="panel"><div class="empty">这里还没有情报。点击右上角「立即采集」抓取一次，或在信息源里添加订阅。</div></div>`;
@@ -254,18 +267,86 @@ async function toggleItem(id, field, force) {
   try {
     await api("/api/items/" + id, { method: "POST", body: { [field]: next } });
     if (item) item[field] = next ? 1 : 0;
-    $$(`.card[data-open="${id}"]`).forEach(el => {
-      if (field === "read") el.classList.toggle("read", !!next);
-      const btn = $(`.icon-btn[data-act="read"]`, el);
-      if (btn) btn.classList.toggle("on", !!next);
-      if (field === "starred") {
-        const sb = $(`.icon-btn[data-act="star"]`, el);
-        if (sb) sb.classList.toggle("on", !!next);
-      }
-    });
+    if (field === "read" && (state.status === "unread" || state.status === "read")) {
+      removeCard(id);
+    } else {
+      $$(`.card[data-open="${id}"]`).forEach(el => {
+        if (field === "read") el.classList.toggle("read", !!next);
+        const btn = $(`.icon-btn[data-act="read"]`, el);
+        if (btn) btn.classList.toggle("on", !!next);
+        if (field === "starred") {
+          const sb = $(`.icon-btn[data-act="star"]`, el);
+          if (sb) sb.classList.toggle("on", !!next);
+        }
+      });
+    }
     toast(next ? (field === "starred" ? "已收藏" : "已标记为已读") : (field === "starred" ? "已取消收藏" : "已标记为未读"), "ok");
     if (state.view === "overview") loadOverview();
   } catch (e) { toast(e.message, "err"); }
+}
+
+function updateFeedMeta() {
+  $("#feedMeta").textContent = `共 ${state.total} 条${state.tag ? ` · 标签「${state.tag}」` : ""}${state.q ? ` · 搜索「${state.q}」` : ""}`;
+}
+
+function removeCard(id) {
+  state.items = state.items.filter(i => i.id !== id);
+  state.offset = Math.max(0, state.offset - 1);
+  state.total = Math.max(0, state.total - 1);
+  $$(`.card[data-open="${id}"]`).forEach(el => el.remove());
+  updateFeedMeta();
+  $("#btnMore").style.display = state.items.length < state.total ? "" : "none";
+  if (!state.items.length && state.total > 0) loadFeed(true);
+}
+
+async function discardItem(id) {
+  try {
+    await api("/api/items/" + id, { method: "DELETE" });
+    removeCard(id);
+    closeModal();
+    toast("已丢弃并删除", "ok");
+    if (state.view === "overview") loadOverview();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function setRating(id, rating) {
+  try {
+    const res = await api("/api/items/" + id, { method: "POST", body: { rating } });
+    const item = state.items.find(i => i.id === id);
+    if (item) { item.rating = res.rating; item.importance = res.importance; }
+    updateCardRating(id, res.rating, res.importance);
+    updateModalRating(id, res.rating, res.importance);
+    toast(`人工评判：${RATING_LABELS[res.rating] || "未评"}，重要度 ${res.importance}`, "ok");
+    if (state.view === "overview") loadOverview();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function updateCardRating(id, rating, importance) {
+  const cls = scoreClass(importance);
+  $$(`.card[data-open="${id}"]`).forEach(card => {
+    card.classList.remove("critical", "high", "mid", "low");
+    card.classList.add(cls);
+    const score = $(".score", card);
+    if (score) {
+      score.textContent = importance;
+      score.classList.remove("critical", "high", "mid", "low");
+      score.classList.add(cls);
+    }
+    $$(".rating-btn", card).forEach(b => b.classList.toggle("on", b.dataset.rate === rating));
+  });
+}
+
+function updateModalRating(id, rating, importance) {
+  const body = $("#modalBody");
+  if (!body || body.dataset.itemId !== String(id)) return;
+  const cls = scoreClass(importance);
+  const score = $(".modal-meta .score", body);
+  if (score) {
+    score.textContent = `${importance} · ${scoreLabel(importance)}`;
+    score.classList.remove("critical", "high", "mid", "low");
+    score.classList.add(cls);
+  }
+  $$("[data-rate]", body).forEach(b => b.classList.toggle("on", b.dataset.rate === rating));
 }
 
 /* ---------------- 详情弹窗 ---------------- */
@@ -285,6 +366,7 @@ async function openItem(id) {
   const tags = (it.tags || []).length
     ? `<div class="modal-tags">${it.tags.map(t => `<span class="mini-tag">${esc(t)}</span>`).join("")}</div>` : "";
 
+  $("#modalBody").dataset.itemId = it.id;
   $("#modalBody").innerHTML = `
     <div class="modal-meta">
       <span class="score ${cls}">${it.importance} · ${scoreLabel(it.importance)}</span>
@@ -297,6 +379,7 @@ async function openItem(id) {
     <h2>${esc(it.title)}</h2>
     ${it.summary ? `<div class="modal-summary">${esc(it.summary)}</div>` : ""}
     ${it.verify_hint ? `<div class="verify-note">文中出现「${esc(it.verify_hint)}」类引用，建议回源核对后再采信或转发。</div>` : ""}
+    <div class="modal-rating"><span>人工评判</span>${ratingGroup(it)}</div>
     ${points}
     ${it.reason ? `<h4>打分理由</h4><p class="hint">${esc(it.reason)}</p>` : ""}
     ${entities}
@@ -306,6 +389,7 @@ async function openItem(id) {
       ${safeUrl(it.url) ? `<a class="btn primary" href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">打开原文 ↗</a>` : ""}
       <button class="btn ghost" data-modal-act="read" data-id="${it.id}" data-next="${it.read ? 0 : 1}">${it.read ? "标记未读" : "标记已读"}</button>
       <button class="btn ghost" data-modal-act="star" data-id="${it.id}" data-next="${it.starred ? 0 : 1}">${it.starred ? "取消收藏" : "收藏"}</button>
+      <button class="btn danger" data-modal-discard="${it.id}">丢弃</button>
     </div>`;
   $("#modalMask").classList.remove("hidden");
 }
@@ -703,6 +787,20 @@ function bind() {
       return;
     }
 
+    const rate = e.target.closest("[data-rate]");
+    if (rate) {
+      e.stopPropagation();
+      setRating(Number(rate.dataset.id), rate.dataset.rate);
+      return;
+    }
+
+    const discard = e.target.closest("[data-discard]");
+    if (discard) {
+      e.stopPropagation();
+      discardItem(Number(discard.dataset.discard));
+      return;
+    }
+
     const open = e.target.closest("[data-open]");
     if (open) {
       const act = e.target.closest("[data-act]");
@@ -728,6 +826,12 @@ function bind() {
       const field = modalAct.dataset.modalAct === "star" ? "starred" : "read";
       toggleItem(Number(modalAct.dataset.id), field, modalAct.dataset.next === "1");
       closeModal();
+      return;
+    }
+
+    const modalDiscard = e.target.closest("[data-modal-discard]");
+    if (modalDiscard) {
+      discardItem(Number(modalDiscard.dataset.modalDiscard));
       return;
     }
 
