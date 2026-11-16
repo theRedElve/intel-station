@@ -2,18 +2,20 @@
 
 记录当前情报站已配置的订阅源、来源类型、实测状态，以及新增/排错方法。源的实际配置存在数据库 `data/intel.db` 的 `feeds` 表，本文件只做说明与备忘。
 
-## 一、已配置源（8 个，全部启用）
+## 一、已配置源（10 个，全部启用）
 
-| # | 名称 | 分类 | RSS 地址 | 站点 | 实测 | 累计入库 |
+| # | 名称 | 分类 | 订阅地址 | 类型 | 实测 | 累计入库 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 少数派 | 产品效率 | `https://sspai.com/feed` | https://sspai.com | 成功 | 18 |
-| 2 | 爱范儿 | 科技商业 | `https://www.ifanr.com/feed` | https://www.ifanr.com | 成功 | 34 |
-| 3 | 量子位 | AI | `https://www.qbitai.com/feed` | https://www.qbitai.com | 成功 | 20 |
-| 4 | Solidot | 技术 | `https://www.solidot.org/index.rss` | https://www.solidot.org | 成功 | 37 |
-| 5 | InfoQ 中文 | 技术 | `https://www.infoq.cn/feed` | https://www.infoq.cn | 成功 | 38 |
-| 6 | 极客公园 | 科技商业 | `https://www.geekpark.net/rss` | https://www.geekpark.net | 成功 | 35 |
-| 7 | 统计之都 COS | 数据分析 | `https://cos.name/feed` | https://cos.name | 成功 | 30 |
-| 8 | 36氪 | 创投商业 | `https://www.36kr.com/feed` | https://36kr.com | 成功 | 30 |
+| 1 | 少数派 | 产品效率 | `https://sspai.com/feed` | RSS | 成功 | 18 |
+| 2 | 爱范儿 | 科技商业 | `https://www.ifanr.com/feed` | RSS | 成功 | 34 |
+| 3 | 量子位 | AI | `https://www.qbitai.com/feed` | RSS | 成功 | 20 |
+| 4 | Solidot | 技术 | `https://www.solidot.org/index.rss` | RSS | 成功 | 37 |
+| 5 | InfoQ 中文 | 技术 | `https://www.infoq.cn/feed` | RSS | 成功 | 38 |
+| 6 | 极客公园 | 科技商业 | `https://www.geekpark.net/rss` | RSS | 成功 | 35 |
+| 7 | 统计之都 COS | 数据分析 | `https://cos.name/feed` | RSS | 成功 | 30 |
+| 8 | 36氪 | 创投商业 | `https://www.36kr.com/feed` | RSS | 成功 | 30 |
+| 9 | 美团技术团队 | 数据分析 | `https://tech.meituan.com/feed` | RSS | 成功 | 10 |
+| 10 | 机器之心 | AI | `https://www.jiqizhixin.com/api/article_library/articles.json?page=1&per_page=20` | JSON 接口 | 成功 | 20 |
 
 > 累计入库为本机当前数据库中的实际条数，会随采集持续增长，仅作参考。
 
@@ -27,6 +29,8 @@
 - **极客公园**：科技商业与创业观察，适合「创业与融资」主题。
 - **36氪**：创投、融资、新商业报道，首发融资类稿件的时效性好，是「创业与融资」主题的主力来源。官方 Feed 正文里偶发混入控制字符，解析前会自动剔除。
 - **统计之都 COS**：数据科学、统计方法与 R 语言社区内容，偏长文技术分享，适合「开源与技术」方向。
+- **美团技术团队**：工程实践与架构复盘类长文，更新慢但质量高，适合「开源与技术」方向。
+- **机器之心**：AI 垂直媒体，官方 RSS 已下线，改用其文章列表 JSON 接口订阅；返回的是导语摘要（约 150 字），不是全文，模型摘要效果仍可用。
 
 ## 二、源与主题的对应关系
 
@@ -34,11 +38,11 @@
 
 | 主题 | 主要来源 |
 | --- | --- |
-| AI 与大模型 | 量子位、InfoQ、极客公园 |
+| AI 与大模型 | 量子位、机器之心、InfoQ、极客公园 |
 | 芯片与硬件 | Solidot、爱范儿 |
 | 创业与融资 | 36氪、极客公园、爱范儿 |
 | 产品与设计 | 少数派、极客公园 |
-| 开源与技术 | Solidot、InfoQ、统计之都 COS |
+| 开源与技术 | Solidot、InfoQ、统计之都 COS、美团技术团队 |
 
 新增主题后无需改源，只要在主题里补充关键词即可影响打分与分类。
 
@@ -49,26 +53,28 @@
 3. 点「添加」，系统会先抓取解析一次：能解析才入库，解析失败直接报错，不会写入脏数据。
 4. 添加成功后可在列表里点「立即抓取」验证是否有内容进来。
 
-### 常见可用的 Feed 地址形态
+### 常见可用的订阅地址形态
 
 - 站点自带：`https://example.com/feed`、`/rss`、`/rss.xml`、`/index.rss`
 - 路径带语言：`https://example.com/zh/feed`
 - 第三方抓取：RSSHub 形如 `https://rsshub.app/<站点>/<栏目>`（需该实例可访问）
+- 站点只有 JSON 接口时：直接把 JSON 列表地址填进来即可，系统会自动识别（返回体以 `{` 或 `[` 开头），并能识别 `articles` / `items` / `data` / `results` / `list` 中的文章数组，字段兼容 `title`、`url`/`link`、`content`/`summary`、`publishedAt`/`published_at`/`date`。
 
-不确定时，先在浏览器打开 Feed 地址，能看到 XML 内容（`<rss>`、`<feed>` 开头）基本就能订阅。
+不确定时，先在浏览器打开地址：能看到 XML（`<rss>`、`<feed>` 开头）或 JSON 数组，基本就能订阅；返回 HTML 页面则说明这不是 Feed。
 
 ## 四、实测失败过的源（备选备忘）
 
-以下源在初始选源阶段实测抓取失败或超时，暂未启用，网络环境变化后可再试：
+以下源实测抓取失败，暂未启用，网络环境变化后可再试：
 
 | 名称 | 曾尝试地址 | 现象 |
 | --- | --- | --- |
-| 机器之心 | `https://www.jiqizhixin.com/rss` | 连接超时 |
 | Hacker News | `https://news.ycombinator.com/rss` | 本机网络不可达 |
 | 阮一峰的网络日志 | `https://www.ruanyifeng.com/blog/atom.xml` | 抓取超时 |
 | 钛媒体 | `https://www.tmtpost.com/rss` | 返回内容解析失败 |
 
 > 36氪已解决：`https://36kr.com/feed` 会返回 HTML 页面，改用带 `www` 的 `https://www.36kr.com/feed` 才是真正的 RSS；该 Feed 部分正文混入控制字符，解析函数已做剔除处理，现可稳定解析 30 条。
+
+> 机器之心已解决：`https://www.jiqizhixin.com/rss` 返回的是前端 HTML 页面（官方 RSS 已下线），改为订阅文章列表接口 `https://www.jiqizhixin.com/api/article_library/articles.json?page=1&per_page=20`，走新增的 JSON 解析通道，实测一次可取 20 条。
 
 失败原因多为网络可达性、反爬拦截或源已停更，与系统本身无关。
 

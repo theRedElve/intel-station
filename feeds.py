@@ -252,6 +252,66 @@ def parse_feed(raw, base_url=""):
     return meta, cleaned
 
 
+def parse_json_feed(raw, base_url=""):
+    """解析 JSON 文章列表接口（如机器之心），返回 (meta, items)。"""
+    import json
+
+    text = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else raw
+    try:
+        data = json.loads(text)
+    except Exception:
+        raise FeedError("不是有效的 JSON 内容")
+
+    entries = None
+    if isinstance(data, list):
+        entries = data
+    elif isinstance(data, dict):
+        for key in ("articles", "items", "data", "results", "list"):
+            value = data.get(key)
+            if isinstance(value, list):
+                entries = value
+                break
+    if entries is None:
+        raise FeedError("JSON 中未找到文章列表")
+
+    host = urlsplit(base_url).netloc if base_url else ""
+    now = int(time.time())
+    items = []
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        title = re.sub(r"\s+", " ", str(entry.get("title") or "")).strip()
+        if not title:
+            continue
+        link = entry.get("url") or entry.get("link") or entry.get("permalink") or ""
+        if not link and entry.get("slug") and host:
+            link = f"https://{host}/articles/{entry['slug']}"
+        if link and not link.startswith("http"):
+            link = urljoin(base_url, link)
+        content = entry.get("content") or entry.get("summary") or entry.get("description") or ""
+        published = (
+            entry.get("publishedAt") or entry.get("published_at")
+            or entry.get("date") or entry.get("pubDate") or ""
+        )
+        key = dedupe_key_for(link, title, base_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({
+            "title": title,
+            "url": link,
+            "author": str(entry.get("author") or ""),
+            "published_at": parse_date(str(published)) or now,
+            "content": html_to_text(str(content))[:8000],
+            "dedupe_key": key,
+        })
+    return {"title": "", "site_url": ""}, items
+
+
 def fetch_feed(url):
     raw = fetch_bytes(url)
+    head = raw.lstrip()[:1]
+    if head in (b"{", b"["):
+        return parse_json_feed(raw, base_url=url)
     return parse_feed(raw, base_url=url)
