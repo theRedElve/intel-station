@@ -290,6 +290,7 @@ def _item_where(status="all", feed_id=None, topic=None, tag=None, q=None,
         where.append("items.read = 1")
     elif status == "high":
         where.append("items.importance >= 70")
+        where.append("items.read = 0")
     elif status == "starred":
         where.append("items.starred = 1")
     if feed_id:

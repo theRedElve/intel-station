@@ -418,7 +418,7 @@ async function toggleItem(id, field, force) {
   try {
     await api("/api/items/" + id, { method: "POST", body: { [field]: next } });
     if (item) item[field] = next ? 1 : 0;
-    if (field === "read" && (state.status === "unread" || state.status === "read")) {
+    if (field === "read" && ["unread", "read", "high"].includes(state.status)) {
       removeCard(id);
     } else {
       $$(`.card[data-open="${id}"]`).forEach(el => {
