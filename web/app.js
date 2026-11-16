@@ -252,8 +252,6 @@ async function loadKnowledge() {
 
 /* ---------------- 人工投递 ---------------- */
 
-let intakeImage = "";
-
 async function loadIntake() {
   let list;
   try { list = await api("/api/intake?limit=20"); } catch (e) { return toast(e.message, "err"); }
@@ -261,37 +259,12 @@ async function loadIntake() {
   $("#intakeRecent").innerHTML = list.length
     ? list.map(it => `
       <div class="mini-item" data-open="${it.id}">
-        <div class="mini-score"><span class="score ${scoreClass(it.importance)}" style="padding:0;border:0;background:none">${it.importance}</span></div>
         <div class="mini-body">
           <div class="mini-title">${esc(it.title)}</div>
-          <div class="mini-meta">${esc(it.channel || "人工投递")}${it.author ? " · " + esc(it.author) : ""} · ${relTime(it.fetched_at)}${it.read ? " · 已读" : " · 未读"}</div>
+          <div class="mini-meta">${esc(it.channel || "人工投递")} · ${relTime(it.fetched_at)}${it.rating ? " · 评判 " + RATING_LABELS[it.rating] : ""}${it.read ? " · 已读" : " · 未读"}</div>
         </div>
       </div>`).join("")
-    : `<div class="empty">把群里看到的截图或一句结论，从左侧投递进来。</div>`;
-}
-
-function setIntakeImage(dataUrl) {
-  intakeImage = dataUrl || "";
-  const preview = $("#intakeImagePreview");
-  const hint = $("#intakeImageHint");
-  if (!preview || !hint) return;
-  if (intakeImage) {
-    preview.src = intakeImage;
-    preview.classList.remove("hidden");
-    hint.classList.add("hidden");
-  } else {
-    preview.removeAttribute("src");
-    preview.classList.add("hidden");
-    hint.classList.remove("hidden");
-  }
-}
-
-function readImageFile(file) {
-  if (!file || !String(file.type || "").startsWith("image/")) return;
-  if (file.size > 6 * 1024 * 1024) return toast("截图需小于 6MB", "err");
-  const reader = new FileReader();
-  reader.onload = () => setIntakeImage(reader.result);
-  reader.readAsDataURL(file);
+    : `<div class="empty">粘贴原文链接后，从左侧提交。</div>`;
 }
 
 async function loadEvents() {
@@ -984,7 +957,6 @@ function bind() {
   });
   $("#feedSelect").addEventListener("change", (e) => { state.feedId = e.target.value; loadFeed(true); });
   $("#topicSelect").addEventListener("change", (e) => { state.topic = e.target.value; loadFeed(true); });
-  $("#sortSelect").addEventListener("change", (e) => { state.sort = e.target.value; loadFeed(true); });
 
   let searchTimer = null;
   $("#feedSearch").addEventListener("input", (e) => {
@@ -1026,33 +998,10 @@ function bind() {
     finally { btn.disabled = false; btn.textContent = "添加"; }
   });
 
-  const imageDrop = $("#intakeImageDrop");
-  if (imageDrop) {
-    imageDrop.addEventListener("click", () => $("#intakeImageInput").click());
-    imageDrop.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      imageDrop.classList.add("drag");
-    });
-    imageDrop.addEventListener("dragleave", () => imageDrop.classList.remove("drag"));
-    imageDrop.addEventListener("drop", (e) => {
-      e.preventDefault();
-      imageDrop.classList.remove("drag");
-      readImageFile((e.dataTransfer.files || [])[0]);
-    });
-    $("#intakeImageInput").addEventListener("change", (e) => {
-      readImageFile((e.target.files || [])[0]);
-      e.target.value = "";
-    });
-    $("#intakeClearImage").addEventListener("click", () => setIntakeImage(""));
-    document.addEventListener("paste", (e) => {
-      if (state.view !== "intake") return;
-      const item = Array.from((e.clipboardData && e.clipboardData.items) || [])
-        .find(x => x.type.startsWith("image/"));
-      if (!item) return;
-      e.preventDefault();
-      readImageFile(item.getAsFile());
-    });
-  }
+  $$("#intakeRating .rating-btn").forEach(btn => btn.addEventListener("click", () => {
+    $$("#intakeRating .rating-btn").forEach(b => b.classList.toggle("on", b === btn));
+    $("#intakeForm").elements.rating.value = btn.dataset.pick;
+  }));
 
   $("#intakeForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1064,23 +1013,14 @@ function bind() {
       const res = await api("/api/intake", {
         method: "POST",
         body: {
-          title: f.title.value.trim(),
-          channel: f.channel.value,
-          author: f.author.value.trim(),
           url: f.url.value.trim(),
-          topic: f.topic.value,
-          importance: Number(f.importance.value) || 0,
-          tags: f.tags.value.trim(),
-          summary: f.summary.value.trim(),
-          points: f.points.value,
-          read: f.read.checked,
-          image: intakeImage,
+          rating: f.rating.value,
         },
       });
-      toast(res.duplicate ? "已存在相同投递" : (f.read.checked ? "已投递并进入知识库" : "已投递，可在情报流查看"), "ok");
+      toast(res.duplicate ? "已存在相同投递" : "已投递，标题和摘要等待后续解析", "ok");
       form.reset();
-      f.importance.value = 60;
-      setIntakeImage("");
+      $$("#intakeRating .rating-btn").forEach(b => b.classList.toggle("on", b.dataset.pick === "mid"));
+      f.rating.value = "mid";
       loadIntake();
       loadSettingsCounters();
     } catch (err) { toast(err.message, "err"); }
@@ -1194,10 +1134,5 @@ async function loadTopicsForFilter() {
     const topics = await api("/api/topics");
     $("#topicSelect").innerHTML = `<option value="">全部主题</option>` +
       topics.map(t => `<option value="${esc(t.name)}" ${t.name === state.topic ? "selected" : ""}>${esc(t.name)}</option>`).join("");
-    const intake = $("#intakeTopic");
-    if (intake) {
-      intake.innerHTML = `<option value="">不指定</option>` +
-        topics.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
-    }
   } catch (e) { /* ignore */ }
 }

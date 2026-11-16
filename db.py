@@ -459,7 +459,12 @@ def add_intake(data):
     """人工投递：写入一条非 RSS 情报，返回新建或命中去重的记录 id。"""
     now = int(time.time())
     external_id = (data.get("external_id") or "").strip()
-    dedupe_key = f"manual:{external_id}" if external_id else f"manual:{now}-{os.urandom(4).hex()}"
+    if external_id:
+        dedupe_key = f"manual:{external_id}"
+    elif (data.get("url") or "").strip():
+        dedupe_key = "manual:url:" + data["url"].strip()
+    else:
+        dedupe_key = f"manual:{now}-{os.urandom(4).hex()}"
     with get_db() as conn:
         cur = conn.execute(
             """INSERT OR IGNORE INTO items

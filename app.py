@@ -48,6 +48,7 @@ def _tier(value, default="media"):
 
 
 RATING_DELTA = {"low": -25, "mid": 0, "high": 12}
+RATING_LABELS = {"low": "低", "mid": "中", "high": "高"}
 
 
 class Api:
@@ -64,12 +65,12 @@ class Api:
         return db.list_intake(limit), 200
 
     def intake_add(self, q, body):
-        title = (body.get("title") or "").strip()
-        if not title:
-            return {"error": "请填写标题"}, 400
         url = (body.get("url") or "").strip()
-        if url and not url.startswith(("http://", "https://")):
+        if not url:
+            return {"error": "请填写原文链接"}, 400
+        if not url.startswith(("http://", "https://")):
             return {"error": "原文链接需以 http(s) 开头"}, 400
+        title = (body.get("title") or "").strip() or url
         rating = (body.get("rating") or "").strip()
         if rating not in ("", "low", "mid", "high"):
             return {"error": "无效的人工评判"}, 400
@@ -78,6 +79,13 @@ class Api:
         except ValueError as e:
             return {"error": str(e)}, 400
         channel = (body.get("channel") or "人工投递").strip() or "人工投递"
+        if body.get("importance") is None:
+            importance = max(0, min(100, 50 + RATING_DELTA.get(rating, 0)))
+        else:
+            importance = max(0, min(100, _to_int(body.get("importance"), 50)))
+        reason = (body.get("note") or "").strip()
+        if not reason:
+            reason = f"人工评判 {RATING_LABELS[rating]}" if rating else "人工投递"
         result = db.add_intake({
             "title": title,
             "url": url,
@@ -87,10 +95,10 @@ class Api:
             "content": (body.get("content") or "").strip(),
             "tags": self._split_list(body.get("tags")),
             "points": self._split_list(body.get("points")),
-            "importance": max(0, min(100, _to_int(body.get("importance"), 60))),
+            "importance": importance,
             "rating": rating,
             "topic": (body.get("topic") or "").strip(),
-            "reason": (body.get("note") or "").strip() or "人工投递",
+            "reason": reason,
             "read": bool(body.get("read")),
             "attachment": attachment,
             "external_id": (body.get("external_id") or "").strip(),
