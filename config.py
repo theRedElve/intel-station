@@ -25,22 +25,7 @@ DEFAULTS = {
         "fetch_minutes": 30,
         "auto_process": True,
         "process_limit": 40,
-        "push_on_fetch": True,
         "digest_time": "09:00",
-    },
-    "push": {
-        "enabled": False,
-        "feishu_webhook": "",
-        "min_importance": 78,
-        "max_items": 6,
-        "email": {
-            "enabled": False,
-            "smtp_host": "",
-            "smtp_port": 465,
-            "username": "",
-            "password": "",
-            "to": "",
-        },
     },
     "collect": {
         "max_items_per_feed": 30,
@@ -88,7 +73,4 @@ def public_config(cfg):
     key = out.get("ai", {}).get("api_key", "")
     out["ai"]["api_key_set"] = bool(key)
     out["ai"]["api_key"] = ""
-    pwd = out.get("push", {}).get("email", {}).get("password", "")
-    out["push"]["email"]["password_set"] = bool(pwd)
-    out["push"]["email"]["password"] = ""
     return out

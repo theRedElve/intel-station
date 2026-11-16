@@ -15,7 +15,6 @@ import config
 import db
 import feeds
 import pipeline
-import push
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
@@ -280,33 +279,6 @@ class Api:
         result = pipeline.generate_digest(config.load_config(), day=day, use_ai=bool(body.get("use_ai", True)))
         return result, 200
 
-    def digest_push(self, q, body):
-        cfg = config.load_config()
-        day = (body.get("day") or pipeline.today_str()).strip()
-        digest = pipeline.get_digest(day)
-        if not digest.get("content"):
-            digest = pipeline.generate_digest(cfg, day=day)
-        from datetime import datetime
-        start = int(datetime.strptime(day, "%Y-%m-%d").timestamp())
-        with db.get_db() as conn:
-            rows = conn.execute(
-                "SELECT * FROM items WHERE fetched_at >= ? AND fetched_at < ? "
-                "ORDER BY importance DESC LIMIT 12",
-                (start, start + 86400),
-            ).fetchall()
-            fmap = {r["id"]: r["title"] for r in conn.execute("SELECT id, title FROM feeds").fetchall()}
-        items = []
-        for r in rows:
-            d = db.row_to_item(r)
-            d["source"] = fmap.get(d["feed_id"], "")
-            items.append(d)
-        try:
-            push.push_digest(day, digest["content"], items, cfg)
-        except Exception as e:  # noqa: BLE001
-            return {"error": str(e)}, 400
-        db.add_event(f"已推送 {day} 简报")
-        return {"ok": True}, 200
-
     def settings(self, q, body):
         return config.public_config(config.load_config()), 200
 
@@ -316,9 +288,6 @@ class Api:
         ai_part = new.get("ai", {})
         if ai_part and not ai_part.get("api_key"):
             ai_part["api_key"] = old["ai"].get("api_key", "")
-        email_part = new.get("push", {}).get("email", {})
-        if email_part and not email_part.get("password"):
-            email_part["password"] = old["push"]["email"].get("password", "")
         cfg = config.save_config(config._merge(old, new))
         db.add_event("更新系统设置")
         return config.public_config(cfg), 200
@@ -338,18 +307,6 @@ class Api:
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}, 400
         return {"ok": True, "reply": reply}, 200
-
-    def test_push(self, q, body):
-        cfg = config.load_config()
-        webhook = (body.get("feishu_webhook") or cfg["push"].get("feishu_webhook") or "").strip()
-        if not webhook:
-            return {"error": "请先填写飞书 Webhook"}, 400
-        try:
-            push.send_feishu(webhook, "情报站连接测试", ["**连接成功**\n个人情报站已可以向你推送高价值情报。"],
-                             footer=time.strftime("%Y-%m-%d %H:%M:%S"))
-        except Exception as e:  # noqa: BLE001
-            return {"error": str(e)}, 400
-        return {"ok": True}, 200
 
     def resources(self, q, body):
         with db.get_db() as conn:
@@ -454,11 +411,9 @@ ROUTES = [
     ("GET", r"^/api/tasks/status$", Api.task_status, False),
     ("GET", r"^/api/digest$", Api.digest, False),
     ("POST", r"^/api/digest/generate$", Api.digest_generate, False),
-    ("POST", r"^/api/digest/push$", Api.digest_push, False),
     ("GET", r"^/api/settings$", Api.settings, False),
     ("POST", r"^/api/settings$", Api.settings_save, False),
     ("POST", r"^/api/settings/test-ai$", Api.test_ai, False),
-    ("POST", r"^/api/settings/test-push$", Api.test_push, False),
     ("GET", r"^/api/events$", Api.events, False),
     ("GET", r"^/api/resources$", Api.resources, False),
     ("POST", r"^/api/resources$", Api.resource_add, False),
@@ -567,7 +522,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def scheduler():
-    """后台调度：定时采集加工，定点生成并推送日报。"""
+    """后台调度：定时采集加工，定点生成日报。"""
     last_digest_day = ""
     while True:
         try:
@@ -590,13 +545,8 @@ def scheduler():
                         (int(time.time()) - 86400,),
                     ).fetchone()["c"]
                 if has_items:
-                    result = pipeline.generate_digest(cfg, day=today)
+                    pipeline.generate_digest(cfg, day=today)
                     last_digest_day = today
-                    if cfg["push"].get("enabled"):
-                        try:
-                            push.push_digest(today, result["content"], [], cfg)
-                        except Exception as e:  # noqa: BLE001
-                            db.add_event(f"日报推送失败：{str(e)[:150]}", level="error")
         except Exception as e:  # noqa: BLE001
             db.add_event(f"调度器异常：{str(e)[:160]}", level="error")
         time.sleep(30)

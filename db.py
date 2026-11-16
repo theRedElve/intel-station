@@ -46,8 +46,7 @@ CREATE TABLE IF NOT EXISTS items (
     rating TEXT DEFAULT '',
     processed INTEGER DEFAULT 0,
     read INTEGER DEFAULT 0,
-    starred INTEGER DEFAULT 0,
-    pushed INTEGER DEFAULT 0
+    starred INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_pub ON items(published_at DESC);

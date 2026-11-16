@@ -1,4 +1,4 @@
-"""采集 → 加工 → 存储 → 推送 的主流水线。"""
+"""采集 → 加工 → 存储 → 简报 的主流水线。"""
 
 import json
 import re
@@ -9,7 +9,6 @@ from datetime import datetime
 import ai
 import db
 import feeds
-import push
 
 LOCK = threading.Lock()
 STATE = {"running": False, "stage": "空闲", "started_at": None, "last_result": None}
@@ -191,33 +190,8 @@ def process_pending(cfg, limit=None, progress=None):
     if ai_error:
         db.add_event("本批情报使用规则评分完成（模型不可用）", level="warn")
 
-    # 高价值即时推送
-    pushed = 0
-    push_cfg = cfg.get("push", {})
-    schedule = cfg.get("schedule", {})
-    if push_cfg.get("enabled") and schedule.get("push_on_fetch", True):
-        threshold = int(push_cfg.get("min_importance") or 78)
-        with db.get_db() as conn:
-            rows = conn.execute(
-                "SELECT * FROM items WHERE pushed = 0 AND processed = 1 AND importance >= ? "
-                "ORDER BY importance DESC LIMIT ?",
-                (threshold, int(push_cfg.get("max_items") or 6)),
-            ).fetchall()
-        candidates = [db.row_to_item(r) for r in rows]
-        if candidates:
-            for c in candidates:
-                c["source"] = feed_map.get(c["feed_id"], "")
-            try:
-                pushed = push.push_high_value(candidates, cfg)
-                ids = [c["id"] for c in candidates]
-                with db.get_db() as conn:
-                    conn.executemany("UPDATE items SET pushed = 1 WHERE id = ?", [(i,) for i in ids])
-                db.add_event(f"已推送 {len(candidates)} 条高价值情报")
-            except Exception as e:  # noqa: BLE001
-                db.add_event(f"推送失败：{str(e)[:160]}", level="error")
-
     db.add_event(f"加工完成 {processed} 条（{'模型' if ai_used else '规则'}）")
-    return {"processed": processed, "ai": ai_used, "error": ai_error, "pushed": pushed}
+    return {"processed": processed, "ai": ai_used, "error": ai_error}
 
 
 def run_pipeline(cfg, feed_id=None, do_process=True):
@@ -228,7 +202,7 @@ def run_pipeline(cfg, feed_id=None, do_process=True):
         STATE["started_at"] = int(time.time())
         t0 = time.time()
         fetch_res = fetch_all(cfg, feed_id=feed_id, progress=lambda m: _set_state(True, m))
-        process_res = {"processed": 0, "pushed": 0}
+        process_res = {"processed": 0}
         if do_process and cfg.get("schedule", {}).get("auto_process", True):
             _set_state(True, "开始加工")
             process_res = process_pending(cfg, progress=lambda m: _set_state(True, m))
@@ -241,8 +215,7 @@ def run_pipeline(cfg, feed_id=None, do_process=True):
         }
         STATE["last_result"] = result
         db.add_event(
-            f"一轮任务完成：新增 {fetch_res['new']} 条，加工 {process_res.get('processed', 0)} 条，"
-            f"推送 {process_res.get('pushed', 0)} 条"
+            f"一轮任务完成：新增 {fetch_res['new']} 条，加工 {process_res.get('processed', 0)} 条"
         )
         return result
     finally:

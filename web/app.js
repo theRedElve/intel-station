@@ -29,7 +29,7 @@ const VIEW_TITLES = {
   sources: ["信息源", "管理 RSS 订阅与采集状态"],
   resources: ["资源库", "权威信息源导航与信源分级"],
   topics: ["关注主题", "用关键词定义你的情报雷达"],
-  settings: ["设置与推送", "模型、调度与通知渠道"],
+  settings: ["设置", "模型与调度"],
 };
 
 const TIER_LABELS = { official: "官方", industry: "行业", media: "媒体" };
@@ -465,14 +465,6 @@ async function generateDigest() {
   finally { btn.disabled = false; btn.textContent = "生成简报"; }
 }
 
-async function pushDigest() {
-  const day = $("#digestDate").value || new Date().toISOString().slice(0, 10);
-  try {
-    await api("/api/digest/push", { method: "POST", body: { day } });
-    toast("已推送到飞书", "ok");
-  } catch (e) { toast(e.message, "err"); }
-}
-
 /* ---------------- 信息源 ---------------- */
 
 async function loadSources() {
@@ -642,22 +634,7 @@ async function loadSettings() {
   $("#schedLimit").value = cfg.schedule.process_limit;
   $("#schedDigest").value = cfg.schedule.digest_time;
   $("#autoProcess").checked = !!cfg.schedule.auto_process;
-  $("#pushOnFetch").checked = !!cfg.schedule.push_on_fetch;
   $("#collectMax").value = cfg.collect.max_items_per_feed;
-
-  $("#pushEnabled").checked = !!cfg.push.enabled;
-  $("#pushWebhook").value = cfg.push.feishu_webhook || "";
-  $("#pushMin").value = cfg.push.min_importance;
-  $("#pushMax").value = cfg.push.max_items;
-
-  const email = cfg.push.email || {};
-  $("#emailEnabled").checked = !!email.enabled;
-  $("#smtpHost").value = email.smtp_host || "";
-  $("#smtpPort").value = email.smtp_port || 465;
-  $("#smtpUser").value = email.username || "";
-  $("#smtpPass").value = "";
-  $("#smtpPass").placeholder = email.password_set ? "已保存，留空则不修改" : "SMTP 授权码";
-  $("#smtpTo").value = email.to || "";
 
   const ov = state.overview || await api("/api/overview").catch(() => null);
   if (ov) $("#dataTotal").textContent = ov.total + " 条";
@@ -679,23 +656,8 @@ async function saveSettings() {
       process_limit: Number($("#schedLimit").value) || 40,
       digest_time: $("#schedDigest").value || "09:00",
       auto_process: $("#autoProcess").checked,
-      push_on_fetch: $("#pushOnFetch").checked,
     },
     collect: { max_items_per_feed: Number($("#collectMax").value) || 30 },
-    push: {
-      enabled: $("#pushEnabled").checked,
-      feishu_webhook: $("#pushWebhook").value.trim(),
-      min_importance: Number($("#pushMin").value) || 78,
-      max_items: Number($("#pushMax").value) || 6,
-      email: {
-        enabled: $("#emailEnabled").checked,
-        smtp_host: $("#smtpHost").value.trim(),
-        smtp_port: Number($("#smtpPort").value) || 465,
-        username: $("#smtpUser").value.trim(),
-        password: $("#smtpPass").value,
-        to: $("#smtpTo").value.trim(),
-      },
-    },
   };
   try {
     const cfg = await api("/api/settings", { method: "POST", body: payload });
@@ -703,7 +665,6 @@ async function saveSettings() {
     $("#saveHint").textContent = "已保存 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
     $("#saveHint").className = "hint ok";
     $("#aiApiKey").value = "";
-    $("#smtpPass").value = "";
     toast("设置已保存", "ok");
   } catch (e) {
     $("#saveHint").textContent = e.message;
@@ -1008,7 +969,6 @@ function bind() {
 
   $("#digestDate").addEventListener("change", (e) => loadDigest(e.target.value));
   $("#btnGenDigest").addEventListener("click", generateDigest);
-  $("#btnPushDigest").addEventListener("click", pushDigest);
   $("#btnCopyDigest").addEventListener("click", async () => {
     const text = $("#digestBody").innerText;
     try {
@@ -1032,22 +992,6 @@ function bind() {
         },
       });
       el.textContent = "连接正常：" + res.reply;
-      el.className = "hint ok";
-    } catch (err) {
-      el.textContent = err.message;
-      el.className = "hint err";
-    }
-  });
-  $("#btnTestPush").addEventListener("click", async () => {
-    const el = $("#pushStatus");
-    el.textContent = "发送中…";
-    el.className = "hint";
-    try {
-      await api("/api/settings/test-push", {
-        method: "POST",
-        body: { feishu_webhook: $("#pushWebhook").value.trim() },
-      });
-      el.textContent = "测试消息已发送，请查看飞书";
       el.className = "hint ok";
     } catch (err) {
       el.textContent = err.message;
