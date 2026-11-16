@@ -296,8 +296,8 @@ def query_items(status="all", feed_id=None, topic=None, tag=None, q=None,
         where.append("items.feed_id = ?")
         params.append(feed_id)
     if topic:
-        where.append("items.topic = ?")
-        params.append(topic)
+        where.append("instr(',' || replace(items.topic, '，', ',') || ',', ?) > 0")
+        params.append(f",{topic},")
     if tag:
         where.append("items.tags LIKE ?")
         params.append(f"%{tag}%")
@@ -382,7 +382,9 @@ def stats_overview():
         topic_counts = []
         for t in topic_rows:
             c = conn.execute(
-                "SELECT COUNT(*) c FROM items WHERE topic = ?", (t["name"],)
+                "SELECT COUNT(*) c FROM items "
+                "WHERE instr(',' || replace(topic, '，', ',') || ',', ?) > 0",
+                (f",{t['name']},",),
             ).fetchone()["c"]
             topic_counts.append({"name": t["name"], "count": c, "weight": t["weight"]})
 
