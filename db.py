@@ -84,6 +84,7 @@ SEED_FEEDS = [
     ("https://www.solidot.org/index.rss", "Solidot", "https://www.solidot.org", "技术"),
     ("https://www.infoq.cn/feed", "InfoQ 中文", "https://www.infoq.cn", "技术"),
     ("https://www.geekpark.net/rss", "极客公园", "https://www.geekpark.net", "科技商业"),
+    ("https://www.36kr.com/feed", "36氪", "https://36kr.com", "创投商业"),
 ]
 
 SEED_TOPICS = [

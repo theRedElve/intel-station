@@ -158,6 +158,11 @@ def dedupe_key_for(url, title, feed_url=""):
 
 def parse_feed(raw, base_url=""):
     """解析 RSS2.0 / Atom / RDF，返回 (meta, items)。"""
+    # 部分源（如 36氪）正文里混入控制字符，会让 XML 解析直接失败，先剔除
+    if isinstance(raw, bytes):
+        raw = re.sub(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", b"", raw)
+    else:
+        raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
     try:
         root = ET.fromstring(raw)
     except ET.ParseError:
