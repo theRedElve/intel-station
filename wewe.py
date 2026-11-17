@@ -30,7 +30,9 @@ def _read(req):
             return resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")
-        raise WeweError(_error_message(raw) or f"WeWe RSS 返回 HTTP {e.code}")
+        err = WeweError(_error_message(raw) or f"WeWe RSS 返回 HTTP {e.code}")
+        err.status = e.code
+        raise err
     except urllib.error.URLError as e:
         raise WeweError(f"连接不上 WeWe RSS：{e.reason}")
     except Exception as e:  # noqa: BLE001
@@ -48,11 +50,32 @@ def _error_message(raw):
             continue
         err = entry["error"]
         payload = err.get("json") if isinstance(err, dict) else None
+        msg = ""
         if isinstance(payload, dict) and payload.get("message"):
-            return payload["message"]
-        if isinstance(err, dict) and err.get("message"):
-            return err["message"]
+            msg = payload["message"]
+        elif isinstance(err, dict) and err.get("message"):
+            msg = err["message"]
+        if msg:
+            return _zod_message(msg)
     return ""
+
+
+def _zod_message(msg):
+    """把 tRPC/zod 的 JSON 报错整理成一句话。"""
+    text = (msg or "").strip()
+    if not text.startswith("["):
+        return text
+    try:
+        rows = json.loads(text)
+    except Exception:  # noqa: BLE001
+        return text
+    parts = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not row.get("message"):
+            continue
+        path = ".".join(str(p) for p in (row.get("path") or []))
+        parts.append((path + ": " if path else "") + row["message"])
+    return "参数校验失败（" + "; ".join(parts) + "）" if parts else text
 
 
 def _parse(raw):
@@ -70,14 +93,17 @@ def _parse(raw):
 
 
 def _post(base, code, procedure, payload):
-    url = f"{base}/trpc/{procedure}?batch=1"
-    bodies = [
-        {"0": {"json": payload}},
-        {"json": payload},
-        payload,
+    batch_url = f"{base}/trpc/{procedure}?batch=1"
+    plain_url = f"{base}/trpc/{procedure}"
+    # 不同版本的 WeWe RSS 对 tRPC 入参包装不一致，按实测顺序逐个尝试
+    attempts = [
+        (batch_url, {"0": payload}),
+        (plain_url, payload),
+        (batch_url, {"0": {"json": payload}}),
+        (plain_url, {"json": payload}),
     ]
     last = None
-    for body in bodies:
+    for url, body in attempts:
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
@@ -88,7 +114,7 @@ def _post(base, code, procedure, payload):
             return _parse(_read(req))
         except WeweError as e:
             last = e
-            if "HTTP 4" not in str(e) and "HTTP 5" not in str(e):
+            if getattr(e, "status", 0) not in (400, 404, 405):
                 raise
     raise last or WeweError("WeWe RSS 请求失败")
 
