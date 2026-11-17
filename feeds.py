@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
@@ -127,6 +128,125 @@ def html_to_text(raw):
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
     return text.strip()
+
+
+VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
+
+
+class _BlockText(HTMLParser):
+    """抓取指定容器（id 或标签名）内的文本。"""
+
+    def __init__(self, tag="", ident=""):
+        super().__init__(convert_charrefs=True)
+        self.tag = tag
+        self.ident = ident
+        self.depth = 0
+        self.active = False
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if not self.active:
+            hit = bool(self.ident) and dict(attrs).get("id") == self.ident
+            hit = hit or (bool(self.tag) and tag == self.tag)
+            if hit:
+                self.active = True
+                self.depth = 1
+            return
+        if tag in VOID_TAGS:
+            if tag == "br":
+                self.parts.append("\n")
+            return
+        if tag in ("p", "div", "li", "section", "h1", "h2", "h3"):
+            self.parts.append("\n")
+        self.depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        if self.active and tag == "br":
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if not self.active or tag in VOID_TAGS:
+            return
+        self.depth -= 1
+        if self.depth <= 0:
+            self.active = False
+        elif tag in ("p", "div", "li", "section", "h1", "h2", "h3"):
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if self.active and data.strip():
+            self.parts.append(data.strip())
+
+
+def _meta_content(raw, *names):
+    """按 property/name 读取 meta 内容，兼容 content 属性在前的写法。"""
+    for name in names:
+        pattern = r"<meta[^>]+(?:property|name)\s*=\s*[\"']%s[\"'][^>]*>" % re.escape(name)
+        for m in re.finditer(pattern, raw, re.I):
+            found = re.search(r"content\s*=\s*[\"']([^\"']*)", m.group(0), re.I)
+            if found:
+                return html.unescape(found.group(1)).strip()
+    return ""
+
+
+def fetch_article(url, limit=20000):
+    """抓取文章页，提取标题、作者、发布时间、描述与正文。"""
+    raw = fetch_bytes(url, timeout=15, retries=1)
+    charset = "utf-8"
+    found = re.search(rb"<meta[^>]+charset\s*=\s*[\"']?([\w-]+)", raw[:4096], re.I)
+    if found:
+        charset = found.group(1).decode("ascii", "ignore")
+    try:
+        page = raw.decode(charset, "ignore")
+    except LookupError:
+        page = raw.decode("utf-8", "ignore")
+    if not page.strip():
+        raise FeedError("页面内容为空")
+
+    title = _meta_content(page, "og:title", "twitter:title")
+    if not title:
+        found = re.search(r"(?is)<title[^>]*>(.*?)</title>", page)
+        title = html.unescape(found.group(1)).strip() if found else ""
+
+    author = _meta_content(page, "author", "article:author", "og:article:author", "twitter:creator")
+    if not author:
+        found = re.search(r"var\s+nickname\s*=\s*[\"']([^\"']{1,40})", page)
+        author = found.group(1).strip() if found else ""
+
+    published = 0
+    published_text = _meta_content(
+        page, "article:published_time", "og:release_date", "publish_time", "pubdate"
+    )
+    if published_text:
+        published = parse_date(published_text) or 0
+    if not published:
+        found = re.search(r"var\s+ct\s*=\s*[\"']?(\d{10})", page)
+        if found:
+            published = int(found.group(1))
+
+    body = ""
+    for tag, ident in (("", "js_content"), ("article", ""), ("", "article")):
+        parser = _BlockText(tag=tag, ident=ident)
+        try:
+            parser.feed(page)
+        except Exception:  # noqa: BLE001
+            continue
+        text = html_to_text("\n".join(parser.parts))
+        if len(text) > len(body):
+            body = text
+    if len(body) < 120:
+        body = html_to_text(page)
+
+    return {
+        "title": title[:200],
+        "author": author[:80],
+        "published_at": published,
+        "description": _meta_content(page, "og:description", "description", "twitter:description")[:300],
+        "content": body[:limit].strip(),
+    }
 
 
 def normalize_url(url):

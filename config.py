@@ -31,10 +31,6 @@ DEFAULTS = {
         "max_items_per_feed": 30,
         "keep_days": 0,
     },
-    "wewe": {
-        "base_url": "http://127.0.0.1:4000",
-        "auth_code": "",
-    },
 }
 
 
@@ -77,7 +73,4 @@ def public_config(cfg):
     key = out.get("ai", {}).get("api_key", "")
     out["ai"]["api_key_set"] = bool(key)
     out["ai"]["api_key"] = ""
-    code = out.get("wewe", {}).get("auth_code", "")
-    out["wewe"]["auth_code_set"] = bool(code)
-    out["wewe"]["auth_code"] = ""
     return out

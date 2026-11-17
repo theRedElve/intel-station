@@ -16,7 +16,6 @@ import config
 import db
 import feeds
 import pipeline
-import wewe
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
@@ -36,11 +35,30 @@ MIME = {
 }
 
 
+def _enrich_manual_item(item_id, url):
+    """后台提取投递原文信息，并放入加工队列。"""
+    try:
+        info = feeds.fetch_article(url)
+    except Exception as e:  # noqa: BLE001
+        db.add_event(f"投递原文提取失败：{str(e)[:120]}", level="warn")
+        return
+    db.enrich_intake(item_id, info)
+    db.add_event(f"已提取投递原文：{(info.get('title') or url)[:40]}")
+
+
 def _to_int(value, default=0):
     try:
         return int(value)
     except Exception:
         return default
+
+
+def _feed_filter(value):
+    """来源筛选：支持数字 ID 与 manual（人工投递）。"""
+    value = str(value or "").strip()
+    if value == "manual":
+        return "manual"
+    return _to_int(value) or None
 
 
 def _tier(value, default="media"):
@@ -111,6 +129,10 @@ class Api:
         })
         if not result["duplicate"] and not (body.get("external_id") or "").strip():
             db.add_event(f"人工投递 {title[:40]}（{channel}）")
+        if result.get("id") and (not result["duplicate"] or db.intake_needs_enrich(result["id"])):
+            threading.Thread(
+                target=_enrich_manual_item, args=(result["id"], url), daemon=True
+            ).start()
         return {"ok": True, **result}, 200
 
     @staticmethod
@@ -148,7 +170,7 @@ class Api:
     def items(self, q, body):
         data = db.query_items(
             status=(q.get("status") or ["all"])[0],
-            feed_id=_to_int((q.get("feed_id") or [0])[0]) or None,
+            feed_id=_feed_filter((q.get("feed_id") or [""])[0]),
             topic=(q.get("topic") or [""])[0] or None,
             tag=(q.get("tag") or [""])[0] or None,
             q=(q.get("q") or [""])[0] or None,
@@ -234,7 +256,7 @@ class Api:
             exclude = [_to_int(i) for i in (body.get("exclude") or [])]
             rows = db.discard_items(
                 status=(body.get("status") or "all"),
-                feed_id=_to_int(body.get("feed_id")) or None,
+                feed_id=_feed_filter(body.get("feed_id")),
                 topic=(body.get("topic") or "") or None,
                 tag=(body.get("tag") or "") or None,
                 q=(body.get("q") or "") or None,
@@ -372,7 +394,7 @@ class Api:
         if pipeline.STATE.get("running"):
             return {"busy": True, "message": "任务正在执行，请稍候"}, 200
         threading.Thread(
-            target=lambda: pipeline.run_pipeline(cfg, feed_id=feed_id, do_process=True),
+            target=lambda: pipeline.run_pipeline(cfg, feed_id=feed_id),
             daemon=True,
         ).start()
         return {"ok": True, "started": True}, 200
@@ -425,9 +447,6 @@ class Api:
         ai_part = new.get("ai", {})
         if ai_part and not ai_part.get("api_key"):
             ai_part["api_key"] = old["ai"].get("api_key", "")
-        wewe_part = new.get("wewe", {})
-        if wewe_part and not wewe_part.get("auth_code"):
-            wewe_part["auth_code"] = old.get("wewe", {}).get("auth_code", "")
         cfg = config.save_config(config._merge(old, new))
         db.add_event("更新系统设置")
         return config.public_config(cfg), 200
@@ -447,47 +466,6 @@ class Api:
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}, 400
         return {"ok": True, "reply": reply}, 200
-
-    def test_wewe(self, q, body):
-        cfg = config.load_config()
-        base = (body.get("base_url") or cfg["wewe"].get("base_url") or "").strip()
-        code = (body.get("auth_code") or "").strip() or cfg["wewe"].get("auth_code", "")
-        try:
-            return wewe.test_connection(base, code), 200
-        except wewe.WeweError as e:
-            return {"error": str(e)}, 400
-
-    def wewe_subscribe(self, q, body):
-        cfg = config.load_config()
-        base = (body.get("base_url") or cfg["wewe"].get("base_url") or "").strip()
-        code = (body.get("auth_code") or "").strip() or cfg["wewe"].get("auth_code", "")
-        try:
-            mp = wewe.resolve_mp(base, code, (body.get("url") or "").strip())
-            wewe.add_feed(base, code, mp)
-            rss = wewe.rss_url(base, mp["id"])
-        except wewe.WeweError as e:
-            return {"error": str(e)}, 400
-        title = mp.get("name") or mp["id"]
-        with db.get_db() as conn:
-            exists = conn.execute("SELECT id FROM feeds WHERE url = ?", (rss,)).fetchone()
-        if exists:
-            return {"ok": True, "duplicate": True, "title": title, "rss_url": rss}, 200
-        wewe.refresh(base, mp["id"])
-        result, status = self.feed_add(q, {
-            "url": rss, "title": title, "category": "公众号", "tier": "media",
-        })
-        if status != 200:
-            with db.get_db() as conn:
-                conn.execute(
-                    "INSERT INTO feeds (url, title, site_url, category, tier, created_at) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (rss, title, "", "公众号", "media", int(time.time())),
-                )
-            db.add_event(f"公众号转 RSS：{title}（{rss}）")
-            return {"ok": True, "title": title, "rss_url": rss,
-                    "warning": result.get("error", "首次抓取失败，稍后采集")}, 200
-        db.add_event(f"公众号转 RSS：{title}（{rss}）")
-        return {"ok": True, "title": title, "rss_url": rss, "feed": result}, 200
 
     def resources(self, q, body):
         with db.get_db() as conn:
@@ -600,8 +578,6 @@ ROUTES = [
     ("GET", r"^/api/settings$", Api.settings, False),
     ("POST", r"^/api/settings$", Api.settings_save, False),
     ("POST", r"^/api/settings/test-ai$", Api.test_ai, False),
-    ("POST", r"^/api/wewe/test$", Api.test_wewe, False),
-    ("POST", r"^/api/wewe/subscribe$", Api.wewe_subscribe, False),
     ("GET", r"^/api/events$", Api.events, False),
     ("GET", r"^/api/resources$", Api.resources, False),
     ("POST", r"^/api/resources$", Api.resource_add, False),

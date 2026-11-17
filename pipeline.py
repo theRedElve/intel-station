@@ -277,7 +277,7 @@ def process_pending(cfg, limit=None, progress=None):
     return {"processed": processed, "ai": ai_used, "error": ai_error}
 
 
-def run_pipeline(cfg, feed_id=None, do_process=True):
+def run_pipeline(cfg, feed_id=None, do_process=False):
     if not LOCK.acquire(blocking=False):
         return {"busy": True, "message": "已有任务在执行"}
     try:

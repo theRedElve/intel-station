@@ -293,7 +293,9 @@ def _item_where(status="all", feed_id=None, topic=None, tag=None, q=None,
         where.append("items.read = 0")
     elif status == "starred":
         where.append("items.starred = 1")
-    if feed_id:
+    if feed_id == "manual":
+        where.append("items.origin = 'manual'")
+    elif feed_id:
         where.append("items.feed_id = ?")
         params.append(feed_id)
     if topic:
@@ -564,7 +566,7 @@ def add_intake(data):
                (feed_id, dedupe_key, url, title, author, published_at, fetched_at,
                 content, summary, key_points, tags, entities, importance, reason, topic,
                 verify_hint, rating, processed, read, starred, origin, channel, attachment)
-               VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,0,'manual',?,?)""",
+               VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,0,'manual',?,?)""",
             (
                 dedupe_key,
                 data.get("url") or "",
@@ -591,6 +593,57 @@ def add_intake(data):
             return {"id": cur.lastrowid, "duplicate": False}
         row = conn.execute("SELECT id FROM items WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
         return {"id": row["id"] if row else None, "duplicate": True}
+
+
+def intake_needs_enrich(item_id):
+    """投递条目是否缺少原文信息（需要后台补全）。"""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT content, summary FROM items WHERE id = ? AND origin = 'manual'",
+            (item_id,),
+        ).fetchone()
+    if not row:
+        return False
+    return not (row["content"] or "").strip() or not (row["summary"] or "").strip()
+
+
+def enrich_intake(item_id, info):
+    """回填投递原文的标题/作者/时间/正文，并确保进入加工队列。"""
+    now = int(time.time())
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            return False
+        sets, params = [], []
+        title = (row["title"] or "").strip()
+        url = (row["url"] or "").strip()
+        new_title = (info.get("title") or "").strip()
+        if new_title and (not title or title == url):
+            sets.append("title = ?")
+            params.append(new_title[:200])
+        content = (info.get("content") or "").strip()
+        if content and len(content) > len(row["content"] or ""):
+            sets.append("content = ?")
+            params.append(content)
+        summary = (info.get("description") or "").strip()
+        if summary and not (row["summary"] or "").strip():
+            sets.append("summary = ?")
+            params.append(summary[:300])
+        author = (info.get("author") or "").strip()
+        if author and not (row["author"] or "").strip():
+            sets.append("author = ?")
+            params.append(author[:80])
+        published = int(info.get("published_at") or 0)
+        if published and published <= now and (
+            not row["published_at"] or row["published_at"] >= now - 86400
+        ):
+            sets.append("published_at = ?")
+            params.append(published)
+        sets.append("processed = 0")
+        conn.execute(
+            "UPDATE items SET %s WHERE id = ?" % ", ".join(sets), (*params, item_id)
+        )
+    return True
 
 
 def list_intake(limit=20):
