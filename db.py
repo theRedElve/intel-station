@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS idx_items_pub ON items(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_items_state ON items(processed, importance DESC);
 
+-- 已丢弃内容的去重记录，避免采集时再次入库
+CREATE TABLE IF NOT EXISTS ignored_items (
+    dedupe_key TEXT PRIMARY KEY,
+    url TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    ignored_at INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
@@ -329,17 +337,42 @@ def discard_items(ids=None, status="all", feed_id=None, topic=None, tag=None,
         if ids:
             marks = ",".join("?" * len(ids))
             rows = conn.execute(
-                f"SELECT id, title, attachment FROM items WHERE id IN ({marks})", ids
+                f"SELECT id, dedupe_key, url, title, attachment FROM items WHERE id IN ({marks})", ids
             ).fetchall()
-            if rows:
-                conn.execute(f"DELETE FROM items WHERE id IN ({marks})", ids)
         else:
             rows = conn.execute(
-                f"SELECT id, title, attachment FROM items WHERE {sql_where}", params
+                f"SELECT id, dedupe_key, url, title, attachment FROM items WHERE {sql_where}", params
             ).fetchall()
-            if rows:
+        if rows:
+            now = int(time.time())
+            conn.executemany(
+                """INSERT OR REPLACE INTO ignored_items (dedupe_key, url, title, ignored_at)
+                   VALUES (?,?,?,?)""",
+                [(r["dedupe_key"], r["url"] or "", r["title"] or "", now)
+                 for r in rows if r["dedupe_key"]],
+            )
+            if ids:
+                conn.execute(f"DELETE FROM items WHERE id IN ({marks})", ids)
+            else:
                 conn.execute(f"DELETE FROM items WHERE {sql_where}", params)
     return [dict(r) for r in rows]
+
+
+def ignored_refs():
+    """已丢弃内容的去重键、URL 与标题。"""
+    with get_db() as conn:
+        rows = conn.execute("SELECT dedupe_key, url, title FROM ignored_items").fetchall()
+    keys = {r["dedupe_key"] for r in rows if r["dedupe_key"]}
+    urls = {r["url"] for r in rows if r["url"]}
+    titles = [r["title"] for r in rows if r["title"]]
+    return keys, urls, titles
+
+
+def item_urls():
+    """已有情报的 URL 集合。"""
+    with get_db() as conn:
+        rows = conn.execute("SELECT url FROM items WHERE url <> ''").fetchall()
+    return {r["url"] for r in rows}
 
 
 def query_items(status="all", feed_id=None, topic=None, tag=None, q=None,

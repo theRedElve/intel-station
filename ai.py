@@ -65,7 +65,7 @@ def is_ready(cfg):
     return bool(ai.get("enabled") and ai.get("api_key") and ai.get("base_url") and ai.get("model"))
 
 
-def _post(cfg, payload):
+def _post(cfg, payload, retries=2, meta=False):
     ai = cfg["ai"]
     url = ai["base_url"].rstrip("/") + "/chat/completions"
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -78,17 +78,32 @@ def _post(cfg, payload):
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=int(ai.get("timeout", 90))) as resp:
-            data = json.loads(resp.read().decode("utf-8", "ignore"))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "ignore")[:300]
-        raise AIError(f"模型接口返回 HTTP {e.code}: {detail}")
-    except Exception as e:  # noqa: BLE001
-        raise AIError(f"模型接口不可用: {e}")
+    data = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=int(ai.get("timeout", 90))) as resp:
+                data = json.loads(resp.read().decode("utf-8", "ignore"))
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "ignore")[:300]
+            # 429/5xx 多为上游瞬时过载，退避后重试
+            if e.code in (429, 500, 502, 503, 504) and attempt < retries:
+                delay = 4 * (attempt + 1) + 2
+                retry_after = e.headers.get("Retry-After") if e.headers else None
+                if retry_after and str(retry_after).isdigit():
+                    delay = min(30, int(retry_after))
+                time.sleep(delay)
+                continue
+            raise AIError(f"模型接口返回 HTTP {e.code}: {detail}")
+        except Exception as e:  # noqa: BLE001
+            raise AIError(f"模型接口不可用: {e}")
 
     try:
-        return data["choices"][0]["message"]["content"] or ""
+        choice = data["choices"][0]
+        content = choice["message"]["content"] or ""
+        if meta:
+            return content, {"finish_reason": choice.get("finish_reason") or ""}
+        return content
     except Exception:
         raise AIError(f"模型返回格式异常: {str(data)[:300]}")
 
@@ -101,7 +116,15 @@ def _extract_json_array(text):
     end = text.rfind("]")
     if start == -1 or end == -1 or end <= start:
         raise AIError("模型未返回 JSON 数组")
-    return json.loads(text[start:end + 1])
+    body = text[start:end + 1]
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        # 容忍尾逗号等常见格式瑕疵
+        try:
+            return json.loads(re.sub(r",\s*([}\]])", r"\1", body))
+        except json.JSONDecodeError as e:
+            raise AIError(f"模型返回的 JSON 格式有误：{e}") from e
 
 
 def _clip(text, limit):
@@ -111,6 +134,14 @@ def _clip(text, limit):
 
 def analyze_batch(items, topics, cfg):
     """对一批情报做摘要/标签/打分，返回 {序号: 分析结果}。"""
+    chunk = 6
+    if len(items) > chunk:
+        merged = {}
+        for i in range(0, len(items), chunk):
+            part = analyze_batch(items[i:i + chunk], topics, cfg)
+            for idx, val in part.items():
+                merged[idx + i] = val
+        return merged
     topic_lines = "\n".join(
         f"- {t['name']}（权重 {t.get('weight', 10)}；关键词：{', '.join(t.get('keywords', []))}）"
         for t in topics
@@ -134,17 +165,35 @@ def analyze_batch(items, topics, cfg):
         f"请输出 JSON 数组，数量必须等于输入的 {len(payload_items)} 条，id 与输入一一对应。"
     )
 
-    content = _post(cfg, {
-        "model": cfg["ai"]["model"],
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 4096,
-    })
+    # glm-4.7 等推理模型的思考过程也占用 max_tokens，需留足余量
+    max_tokens = 8192
+    for attempt in range(2):
+        content, meta = _post(cfg, {
+            "model": cfg["ai"]["model"],
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }, meta=True)
 
-    arr = _extract_json_array(content)
+        if not (content or "").strip():
+            if meta.get("finish_reason") == "length":
+                raise AIError(f"模型输出被截断（{len(payload_items)} 条批次过大），请调小每批条数")
+            raise AIError("模型返回空内容，可能触发内容审查或输出截断")
+
+        try:
+            arr = _extract_json_array(content)
+            break
+        except AIError as e:
+            if meta.get("finish_reason") == "length":
+                raise AIError(f"模型输出被截断（{len(payload_items)} 条批次过大），请调小每批条数") from e
+            if attempt == 0:
+                # 偶发格式错误：加强约束后重试一次
+                user_prompt += "\n\n注意：上一次输出不是合法 JSON。请确保字符串内的双引号、换行都已正确转义，只输出 JSON 数组。"
+                continue
+            raise
     out = {}
     for obj in arr:
         if not isinstance(obj, dict):

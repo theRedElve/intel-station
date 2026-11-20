@@ -85,6 +85,17 @@ function toast(msg, type = "") {
   toast._t = setTimeout(() => { el.className = "toast " + type; }, 2600);
 }
 
+function showAlert(title, message, detail = "") {
+  $("#modalBody").innerHTML = `
+    <div class="alert-head"><div class="alert-icon">!</div><h2 class="alert-title">${esc(title)}</h2></div>
+    <p class="alert-desc">${esc(message)}</p>
+    ${detail ? `<div class="alert-detail">${esc(detail)}</div>` : ""}
+    <div class="alert-actions"><button class="btn" id="alertOk">知道了</button></div>`;
+  $("#modalMask").classList.add("alert-mode");
+  $("#modalMask").classList.remove("hidden");
+  $("#alertOk").addEventListener("click", closeModal);
+}
+
 function relTime(ts) {
   if (!ts) return "";
   const diff = Date.now() / 1000 - ts;
@@ -556,7 +567,10 @@ async function openItem(id) {
   $("#modalMask").classList.remove("hidden");
 }
 
-function closeModal() { $("#modalMask").classList.add("hidden"); }
+function closeModal() {
+  $("#modalMask").classList.add("hidden");
+  $("#modalMask").classList.remove("alert-mode");
+}
 
 /* ---------------- 简报 ---------------- */
 
@@ -866,7 +880,14 @@ async function pollStatus(force = false) {
     $("#btnProcess").disabled = state.running;
 
     if (wasRunning && !state.running) {
-      toast("任务已完成", "ok");
+      const perr = st.last_result && st.last_result.processed && st.last_result.processed.error;
+      if (perr) {
+        const remain = st.last_result.processed.remaining;
+        const kept = remain > 0 ? `剩余 ${remain} 条情报仍在加工队列，稍后点击「加工队列」重试即可。` : "情报仍在加工队列，稍后重试即可。";
+        showAlert("模型加工失败", kept, `错误原因：${perr}`);
+      } else {
+        toast("任务已完成", "ok");
+      }
       if (state.view === "overview") loadOverview();
       if (state.view === "feed") loadFeed(true);
       if (state.view === "sources") loadSources();

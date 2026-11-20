@@ -415,12 +415,17 @@ class Api:
             try:
                 pipeline._set_state(True, "加工队列")
                 pipeline.STATE["started_at"] = int(time.time())
+                pipeline.STATE["last_result"] = None
+                last = {"processed": 0, "error": ""}
                 for _ in range(10):
-                    res = pipeline.process_pending(
+                    last = pipeline.process_pending(
                         cfg, progress=lambda m: pipeline._set_state(True, m)
                     )
-                    if not res.get("processed"):
+                    if last.get("error") or not last.get("processed"):
                         break
+                pipeline.STATE["last_result"] = {
+                    "fetched": {}, "processed": last
+                }
             finally:
                 pipeline._set_state(False, "空闲")
                 pipeline.STATE["started_at"] = None

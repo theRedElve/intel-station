@@ -146,6 +146,9 @@ def fetch_all(cfg, feed_id=None, progress=None):
         return {"feeds": 0, "new": 0, "details": []}
 
     recent = _load_recent_titles()
+    ignored_keys, ignored_urls, ignored_titles = db.ignored_refs()
+    recent.extend([(_title_shingles(t), t) for t in ignored_titles])
+    existing_urls = db.item_urls()
     max_items = int(cfg.get("collect", {}).get("max_items_per_feed") or 30)
     details = []
     total_new = 0
@@ -161,6 +164,10 @@ def fetch_all(cfg, feed_id=None, progress=None):
             now = int(time.time())
             with db.get_db() as conn:
                 for it in items:
+                    if it["dedupe_key"] in ignored_keys:
+                        continue
+                    if it.get("url") and (it["url"] in ignored_urls or it["url"] in existing_urls):
+                        continue
                     shingles = _title_shingles(it["title"])
                     if any(_similar(shingles, s) for s, _ in recent):
                         continue
@@ -174,6 +181,8 @@ def fetch_all(cfg, feed_id=None, progress=None):
                     if cur.rowcount:
                         new_count += 1
                         recent.append((shingles, it["title"]))
+                        if it.get("url"):
+                            existing_urls.add(it["url"])
                 conn.execute(
                     """UPDATE feeds SET last_fetch_at = ?, last_status = ?, error_count = 0,
                        title = CASE WHEN title = '' THEN ? ELSE title END,
@@ -214,7 +223,7 @@ def process_pending(cfg, limit=None, progress=None):
         ).fetchall()
     pending = [dict(r) for r in rows]
     if not pending:
-        return {"processed": 0, "ai": False, "error": ""}
+        return {"processed": 0, "ai": False, "error": "", "remaining": 0}
 
     for row in pending:
         try:
@@ -240,13 +249,17 @@ def process_pending(cfg, limit=None, progress=None):
         if progress:
             progress(f"加工情报 {start + 1}-{start + len(batch)}/{len(pending)}")
         results = {}
-        if use_ai and not ai_error:
+        if use_ai:
             try:
                 results = ai.analyze_batch(batch, topics, cfg)
                 ai_used = True
             except Exception as e:  # noqa: BLE001
                 ai_error = str(e)[:200]
-                db.add_event(f"模型加工失败，已回退规则评分：{ai_error}", level="error")
+                db.add_event(
+                    f"模型加工失败，{len(pending) - processed} 条保留在加工队列：{ai_error}",
+                    level="error",
+                )
+                break
 
         now = int(time.time())
         with db.get_db() as conn:
@@ -271,10 +284,15 @@ def process_pending(cfg, limit=None, progress=None):
         time.sleep(0.1)
 
     if ai_error:
-        db.add_event("本批情报使用规则评分完成（模型不可用）", level="warn")
-
-    db.add_event(f"加工完成 {processed} 条（{'模型' if ai_used else '规则'}）")
-    return {"processed": processed, "ai": ai_used, "error": ai_error}
+        db.add_event(f"本轮加工中止，剩余 {len(pending) - processed} 条仍在加工队列", level="warn")
+    elif processed:
+        db.add_event(f"加工完成 {processed} 条（{'模型' if ai_used else '规则'}）")
+    return {
+        "processed": processed,
+        "ai": ai_used,
+        "error": ai_error,
+        "remaining": len(pending) - processed,
+    }
 
 
 def run_pipeline(cfg, feed_id=None, do_process=False):

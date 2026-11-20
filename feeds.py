@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import html
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -45,7 +46,16 @@ def fetch_bytes(url, timeout=20, retries=1):
                     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                 },
             )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            try:
+                resp = urllib.request.urlopen(req, timeout=timeout)
+            except urllib.error.URLError as e:
+                if not isinstance(e.reason, ssl.SSLCertVerificationError):
+                    raise
+                # 部分站点证书与域名不匹配，浏览器可手动放行；这里降级重试一次
+                resp = urllib.request.urlopen(
+                    req, timeout=timeout, context=ssl._create_unverified_context()
+                )
+            with resp:
                 raw = resp.read()
                 encoding = (resp.headers.get("Content-Encoding") or "").lower()
                 if "gzip" in encoding:
